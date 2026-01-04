@@ -62,6 +62,11 @@ fun init(ctx: &mut TxContext) {
     transfer::transfer(admin_cap, ctx.sender())
 }
 
+#[test_only]
+public fun init_for_testing(ctx: &mut TxContext) {
+    init(ctx)
+}
+
 // entry fun
 public fun create_escrow<T>(
     payment: Coin<T>,
@@ -124,7 +129,7 @@ public fun cancel_escrow<T>(
 ) {
     assert!(ctx.sender() == escrow.buyer, E_NOT_AUTHORIZED_TO_CANCEL);
     
-    assert!(escrow.status = STATUS_LOCKED, E_NOT_LOCKED);
+    assert!(escrow.status == STATUS_LOCKED, E_NOT_LOCKED);
 
     let amount = escrow.balance.value();
     let payment = coin::from_balance(escrow.balance.withdraw_all(), ctx);
@@ -132,13 +137,86 @@ public fun cancel_escrow<T>(
     escrow.status = STATUS_CANCELLED;
 
     event::emit(EscrowCancelled {
-        escrow: object::id(escrow),
+        escrow_id: object::id(escrow),
         buyer: escrow.buyer,
         agent: escrow.agent,
         amount,
-        job_reference: escrow.job_reference,
-    })    
+    });    
 
     transfer::public_transfer(payment, escrow.buyer);
 }
 
+// view function
+public fun get_escrow_id<T>(escrow: &LockedPayment<T>): ID {
+    object::id(escrow)  
+}
+
+public fun get_buyer<T>(escrow: &LockedPayment<T>): address {
+    escrow.buyer
+}
+
+/// Lấy địa chỉ của Agent
+public fun get_agent<T>(escrow: &LockedPayment<T>): address {
+    escrow.agent
+}
+
+/// Lấy trạng thái hiện tại (0: Locked, 1: Released, 2: Cancelled)
+public fun get_status<T>(escrow: &LockedPayment<T>): u8 {
+    escrow.status
+}
+
+/// Lấy số dư hiện có trong Escrow
+public fun get_balance_value<T>(escrow: &LockedPayment<T>): u64 {
+    escrow.balance.value()
+}
+
+/// Kiểm tra xem Escrow có đang bị khóa (chờ xử lý) hay không
+public fun is_locked<T>(escrow: &LockedPayment<T>): bool {
+    escrow.status == STATUS_LOCKED
+}
+
+
+// =============================================================================
+// ADMIN FUNCTIONS
+// =============================================================================
+
+/// Định nghĩa thêm một Event để theo dõi các hành động khẩn cấp của Admin
+public struct EmergencyRecoveryPerformed has copy, drop {
+    escrow_id: ID,
+    admin_address: address,
+    recipient: address,
+    amount: u64,
+}
+
+/// @notice Emergency function to recover stuck funds (admin only)
+/// @dev Only callable by AdminCap holder
+public fun emergency_recover<T>(
+    _admin_cap: &AdminCap,
+    escrow: &mut LockedPayment<T>,
+    recipient: address,
+    ctx: &mut TxContext
+) {
+    // 1. Kiểm tra số dư hiện có trong Escrow
+    let amount = escrow.balance.value();
+    
+    // Đảm bảo vẫn còn tiền để rút
+    assert!(amount > 0, E_INVALID_AMOUNT);
+
+    // 2. Rút toàn bộ tiền
+    let recovered_coin = coin::from_balance(escrow.balance.withdraw_all(), ctx);
+
+    // 3. Cập nhật trạng thái sang CANCELLED hoặc một trạng thái EMERGENCY riêng biệt
+    // Ở đây dùng STATUS_CANCELLED để đánh dấu escrow đã kết thúc
+    escrow.status = STATUS_CANCELLED;
+
+    // 4. Emit event để phục vụ việc audit (truy xuất lịch sử)
+    event::emit(EmergencyRecoveryPerformed {
+        escrow_id: object::id(escrow),
+        admin_address: ctx.sender(),
+        recipient,
+        amount,
+    });
+
+    // 5. Chuyển tiền tới người nhận chỉ định
+    transfer::public_transfer(recovered_coin, recipient);
+}
