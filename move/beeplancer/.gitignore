@@ -1,0 +1,25 @@
+# Build artifacts
+build/
+.move/
+
+# Dependencies lock file (optional, usually ignored in active dev if not strictly versioned)
+Move.lock
+
+# Coverage and trace
+.trace
+.coverage*
+
+# Keystores and secrets
+*.keystore
+*.key
+
+# IDE and Editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# System files
+.DS_Store
+Thumbs.db
+
