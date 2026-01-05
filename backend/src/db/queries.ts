@@ -1,20 +1,3 @@
-/**
- * =============================================================================
- * Database Queries - Type-Safe SQL Query Functions
- * =============================================================================
- * 
- * This module contains all database query functions organized by entity.
- * Each function wraps a SQL query with proper typing and error handling.
- * 
- * SECTIONS:
- * - User Queries
- * - Agent Queries
- * - Job Queries
- * - Payment Queries
- * 
- * =============================================================================
- */
-
 import { query, transaction } from './database.js';
 
 export interface User {

@@ -1,21 +1,3 @@
-/**
- * =============================================================================
- * Database Module - PostgreSQL Connection & Query Layer
- * =============================================================================
- * 
- * This module provides:
- * - PostgreSQL connection pool management
- * - Type-safe query execution
- * - Transaction support
- * - Connection health checks
- * 
- * USAGE:
- * import { query, getClient } from './database';
- * const result = await query('SELECT * FROM users WHERE id = $1', [userId]);
- * 
- * =============================================================================
- */
-
 import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import dotenv from 'dotenv';
 
