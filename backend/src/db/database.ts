@@ -81,31 +81,22 @@ function getDbConfig(): DatabaseConfig {
  * @throws Error if connection fails
  */
 export async function initializeDatabase(): Promise<void> {
-    // TODO: Implement database initialization
+    const config = getDbConfig();
+    pool = new Pool(config);
 
-    // Create pool
-    // const config = getDbConfig();
-    // pool = new Pool(config);
+    pool.on('error', (err) => {
+        console.error('Unexpected database pool error:', err);
+    });
 
-    // Set up error handler for unexpected errors
-    // pool.on('error', (err) => {
-    //     console.error('Unexpected database pool error:', err);
-    // });
+    const client = await pool.connect();
+    try {
+        await client.query('SELECT NOW()');
+    } finally {
+        client.release();
+    }
 
-    // Test connection
-    // const client = await pool.connect();
-    // try {
-    //     await client.query('SELECT NOW()');
-    // } finally {
-    //     client.release();
-    // }
-
-    console.log('[DB] Database initialization - TODO: Implement');
+    console.log('[DB] Database initialization');
 }
-
-// =============================================================================
-// QUERY FUNCTIONS
-// =============================================================================
 
 /**
  * Execute a SQL query with parameterized values
@@ -125,127 +116,63 @@ export async function query<T extends QueryResultRow = any>(
     text: string,
     params?: any[]
 ): Promise<QueryResult<T>> {
-    // TODO: Implement query execution
+    if (!pool) {
+        throw new Error('Database not initialized. Call initializeDatabase() first.');
+    }
 
-    // if (!pool) {
-    //     throw new Error('Database not initialized. Call initializeDatabase() first.');
-    // }
+    const start = Date.now();
+    const result = await pool.query<T>(text, params);
+    const duration = Date.now() - start;
 
-    // const start = Date.now();
-    // const result = await pool.query<T>(text, params);
-    // const duration = Date.now() - start;
+    if (process.env.NODE_ENV === 'development' && duration > 100) {
+        console.log(`[DB] Slow query (${duration}ms):`, text);
+    } 
 
-    // Log slow queries in development
-    // if (process.env.NODE_ENV === 'development' && duration > 100) {
-    //     console.log(`[DB] Slow query (${duration}ms):`, text);
-    // }
-
-    // return result;
-
-    throw new Error('query() not implemented');
+    return result;
 }
 
-/**
- * Get a client from the pool for transactions
- * 
- * IMPORTANT: Always release the client when done!
- * 
- * EXAMPLE:
- * const client = await getClient();
- * try {
- *     await client.query('BEGIN');
- *     await client.query('UPDATE jobs SET status = $1 WHERE id = $2', ['working', jobId]);
- *     await client.query('INSERT INTO job_logs ...');
- *     await client.query('COMMIT');
- * } catch (e) {
- *     await client.query('ROLLBACK');
- *     throw e;
- * } finally {
- *     client.release();
- * }
- */
 export async function getClient(): Promise<PoolClient> {
-    // TODO: Implement get client
-
-    // if (!pool) {
-    //     throw new Error('Database not initialized');
-    // }
-    // return pool.connect();
-
-    throw new Error('getClient() not implemented');
+    if (!pool) {
+        throw new Error('Database not initialized');
+    }
+    return pool.connect();
 }
 
-/**
- * Execute multiple queries in a transaction
- * 
- * @param callback - Function that receives a client and executes queries
- * @returns The result of the callback function
- * 
- * EXAMPLE:
- * const result = await transaction(async (client) => {
- *     await client.query('UPDATE ...');
- *     await client.query('INSERT ...');
- *     return { success: true };
- * });
- */
+
 export async function transaction<T>(
     callback: (client: PoolClient) => Promise<T>
 ): Promise<T> {
-    // TODO: Implement transaction wrapper
-
-    // const client = await getClient();
-    // try {
-    //     await client.query('BEGIN');
-    //     const result = await callback(client);
-    //     await client.query('COMMIT');
-    //     return result;
-    // } catch (error) {
-    //     await client.query('ROLLBACK');
-    //     throw error;
-    // } finally {
-    //     client.release();
-    // }
-
-    throw new Error('transaction() not implemented');
+    if (!pool) {
+        throw new Error('Database not initialized');
+    }
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const result = await callback(client);
+        await client.query('COMMIT');
+        return result;
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
 }
 
-// =============================================================================
-// HEALTH CHECK
-// =============================================================================
-
-/**
- * Check if database is healthy and responsive
- * 
- * @returns true if database responds to ping, false otherwise
- */
 export async function checkHealth(): Promise<boolean> {
-    // TODO: Implement health check
-
-    // try {
-    //     await query('SELECT 1');
-    //     return true;
-    // } catch {
-    //     return false;
-    // }
-
-    return false;
+    try {
+        await query('SELECT 1');
+        return true;
+    } catch {
+        return false;
+    }
 }
 
-// =============================================================================
-// CLEANUP
-// =============================================================================
-
-/**
- * Close all database connections
- * Call this when shutting down the server
- */
 export async function closeDatabase(): Promise<void> {
-    // TODO: Implement database cleanup
-
-    // if (pool) {
-    //     await pool.end();
-    //     pool = null;
-    // }
+    if (pool) {
+        await pool.end();
+        pool = null;
+    }
 
     console.log('[DB] Database closed');
 }
