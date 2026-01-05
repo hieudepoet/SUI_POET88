@@ -4,18 +4,19 @@
  * =============================================================================
  * 
  * Endpoints:
- * - POST   /api/v1/jobs          - Create a new job
- * - GET    /api/v1/jobs          - List jobs (with filters)
- * - GET    /api/v1/jobs/:id      - Get job details
- * - POST   /api/v1/jobs/:id/hire - Initiate hire (create invoice)
- * - POST   /api/v1/jobs/:id/approve - Approve work and release funds
- * - POST   /api/v1/jobs/:id/cancel - Cancel job
- * - GET    /api/v1/jobs/:id/delivery - Get job delivery/result
+ * - POST   /api/v1/jobs              - Create new job
+ * - GET    /api/v1/jobs              - List jobs (with filters)
+ * - GET    /api/v1/jobs/:id          - Get job details
+ * - POST   /api/v1/jobs/:id/hire     - Create invoice for hiring
+ * - POST   /api/v1/jobs/:id/delivery - Submit job delivery
+ * - POST   /api/v1/jobs/:id/approve  - Approve delivery & release escrow
+ * - POST   /api/v1/jobs/:id/cancel   - Cancel job
  * 
  * =============================================================================
  */
 
-import { Router, Request, Response, NextFunction } from 'express';
+import { Router, Request, Response } from 'express';
+import * as queries from '../db/queries.js';
 
 const router = Router();
 
@@ -26,40 +27,25 @@ const router = Router();
 interface CreateJobBody {
     title: string;
     requirements?: string;
+    buyerId: number;
+    agentId?: number;
     amountUsdc: number;
-    agentId?: number;
 }
 
-interface JobsQueryParams {
-    status?: string;
-    buyerId?: number;
-    agentId?: number;
-    page?: number;
-    limit?: number;
+interface HireBody {
+    generateQrCode?: boolean;
 }
 
-// =============================================================================
-// MIDDLEWARE
-// =============================================================================
+interface DeliveryBody {
+    content: string;
+    deliveryType?: 'code' | 'document' | 'link' | 'text';
+    externalUrl?: string;
+    notes?: string;
+}
 
-/**
- * Authentication middleware
- * Verifies the user's wallet signature
- * 
- * TODO: Implement proper wallet authentication
- */
-async function authenticateWallet(req: Request, res: Response, next: NextFunction) {
-    // Extract wallet address from Authorization header or cookie
-    // Verify signature if provided
-
-    // For now, just check for a wallet address header
-    // const walletAddress = req.headers['x-wallet-address'] as string;
-    // if (!walletAddress) {
-    //     return res.status(401).json({ error: 'Authentication required' });
-    // }
-    // req.user = { walletAddress };
-
-    next();
+interface ApproveBody {
+    approved: boolean;
+    feedback?: string;
 }
 
 // =============================================================================
@@ -69,55 +55,64 @@ async function authenticateWallet(req: Request, res: Response, next: NextFunctio
 /**
  * POST /api/v1/jobs
  * Create a new job
- * 
- * Body:
- * - title: string (required)
- * - requirements: string
- * - amountUsdc: number (required)
- * - agentId: number (optional - assign specific agent)
- * 
- * Returns:
- * - Created job object with reference_key
- * 
- * TODO: Implement job creation
  */
-router.post('/', authenticateWallet, async (req: Request, res: Response) => {
+router.post('/', async (req: Request, res: Response) => {
     try {
-        const body = req.body as CreateJobBody;
+        const { title, requirements, buyerId, agentId, amountUsdc } = 
+            req.body as CreateJobBody;
 
         // Validate required fields
-        // if (!body.title || !body.amountUsdc) {
-        //     return res.status(400).json({ error: 'title and amountUsdc are required' });
-        // }
+        if (!title || !buyerId || !amountUsdc) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'title, buyerId, and amountUsdc are required',
+            });
+        }
 
-        // Validate amount range
-        // const minAmount = 1;
-        // const maxAmount = 10000;
-        // if (body.amountUsdc < minAmount || body.amountUsdc > maxAmount) {
-        //     return res.status(400).json({ 
-        //         error: `Amount must be between ${minAmount} and ${maxAmount} USDC` 
-        //     });
-        // }
+        // Validate amount
+        if (amountUsdc <= 0) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'amountUsdc must be greater than 0',
+            });
+        }
 
-        // Get or create buyer user
-        // const buyerWallet = req.user.walletAddress;
-        // const buyer = await getOrCreateUser(buyerWallet);
+        // Create job
+        const job = await queries.createJob(
+            title,
+            buyerId,
+            amountUsdc,
+            requirements,
+            agentId
+        );
 
-        // Create the job
-        // const job = await createJob(
-        //     body.title,
-        //     buyer.id,
-        //     body.amountUsdc,
-        //     body.requirements,
-        //     body.agentId
-        // );
-
-        // return res.status(201).json({ job });
-
-        res.status(501).json({ error: 'Not implemented' });
+        res.status(201).json({
+            status: 201,
+            error: false,
+            message: 'Job created successfully',
+            data: {
+                job: {
+                    id: job.id,
+                    title: job.title,
+                    requirements: job.requirements,
+                    buyerId: job.buyer_id,
+                    agentId: job.agent_id,
+                    amountUsdc: job.amount_usdc,
+                    status: job.status,
+                    referenceKey: job.reference_key,
+                    createdAt: job.created_at,
+                },
+            },
+        });
     } catch (error) {
         console.error('Error creating job:', error);
-        res.status(500).json({ error: 'Failed to create job' });
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to create job',
+        });
     }
 });
 
@@ -126,263 +121,465 @@ router.post('/', authenticateWallet, async (req: Request, res: Response) => {
  * List jobs with optional filters
  * 
  * Query params:
- * - status: Filter by job status
  * - buyerId: Filter by buyer
  * - agentId: Filter by agent
- * - page: Page number (default 1)
- * - limit: Items per page (default 20)
- * 
- * Returns:
- * - Array of jobs with pagination info
- * 
- * TODO: Implement job listing
+ * - status: Filter by status
  */
 router.get('/', async (req: Request, res: Response) => {
     try {
-        const query = req.query as JobsQueryParams;
+        const { buyerId, agentId, status } = req.query;
 
-        // Parse pagination
-        // const page = Math.max(1, parseInt(query.page?.toString() || '1'));
-        // const limit = Math.min(100, Math.max(1, parseInt(query.limit?.toString() || '20')));
-        // const offset = (page - 1) * limit;
+        let jobs;
 
-        // Build query based on filters
-        // TODO: Implement filtered query
+        if (buyerId) {
+            jobs = await queries.getJobsByBuyer(
+                parseInt(buyerId as string),
+                status as any
+            );
+        } else if (agentId) {
+            jobs = await queries.getJobsByAgent(
+                parseInt(agentId as string),
+                status as any
+            );
+        } else {
+            // TODO: Implement getAllJobs query
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'Please provide buyerId or agentId filter',
+            });
+        }
 
-        // const jobs = [];
-        // const total = 0;
-
-        // return res.json({
-        //     jobs,
-        //     pagination: {
-        //         page,
-        //         limit,
-        //         total,
-        //         totalPages: Math.ceil(total / limit)
-        //     }
-        // });
-
-        res.status(501).json({ error: 'Not implemented' });
+        res.json({
+            status: 200,
+            error: false,
+            message: `Found ${jobs.length} jobs`,
+            data: {
+                jobs: jobs.map(job => ({
+                    id: job.id,
+                    title: job.title,
+                    requirements: job.requirements,
+                    buyerId: job.buyer_id,
+                    agentId: job.agent_id,
+                    amountUsdc: job.amount_usdc,
+                    status: job.status,
+                    referenceKey: job.reference_key,
+                    escrowObjectId: job.escrow_object_id,
+                    createdAt: job.created_at,
+                    deliveredAt: job.delivered_at,
+                })),
+                count: jobs.length,
+            },
+        });
     } catch (error) {
         console.error('Error listing jobs:', error);
-        res.status(500).json({ error: 'Failed to list jobs' });
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to list jobs',
+        });
     }
 });
 
 /**
  * GET /api/v1/jobs/:id
- * Get detailed job information
- * 
- * Returns:
- * - Full job object with buyer and agent details
- * 
- * TODO: Implement job detail retrieval
+ * Get job details
  */
 router.get('/:id', async (req: Request, res: Response) => {
     try {
         const jobId = parseInt(req.params.id);
 
-        // if (isNaN(jobId)) {
-        //     return res.status(400).json({ error: 'Invalid job ID' });
-        // }
+        if (isNaN(jobId)) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'Invalid job ID',
+            });
+        }
 
-        // const job = await getJobById(jobId);
+        const job = await queries.getJobById(jobId);
 
-        // if (!job) {
-        //     return res.status(404).json({ error: 'Job not found' });
-        // }
+        if (!job) {
+            return res.status(404).json({
+                status: 404,
+                error: true,
+                message: 'Job not found',
+            });
+        }
 
-        // return res.json({ job });
+        // TODO: Get related data (buyer, agent, deliveries)
+        // const buyer = await queries.getUserById(job.buyer_id);
+        // const agent = job.agent_id ? await queries.getUserById(job.agent_id) : null;
+        // const deliveries = await queries.getDeliveriesByJob(jobId);
 
-        res.status(501).json({ error: 'Not implemented' });
+        res.json({
+            status: 200,
+            error: false,
+            message: 'Job details retrieved successfully',
+            data: {
+                job: {
+                    id: job.id,
+                    title: job.title,
+                    requirements: job.requirements,
+                    buyerId: job.buyer_id,
+                    agentId: job.agent_id,
+                    amountUsdc: job.amount_usdc,
+                    status: job.status,
+                    referenceKey: job.reference_key,
+                    beepInvoiceId: job.beep_invoice_id,
+                    escrowObjectId: job.escrow_object_id,
+                    escrowTxDigest: job.escrow_tx_digest,
+                    releaseTxDigest: job.release_tx_digest,
+                    createdAt: job.created_at,
+                    paidAt: job.paid_at,
+                    startedAt: job.started_at,
+                    deliveredAt: job.delivered_at,
+                    completedAt: job.completed_at,
+                    paidOutAt: job.paid_out_at,
+                },
+                // buyer,
+                // agent,
+                // deliveries,
+            },
+        });
     } catch (error) {
-        console.error('Error getting job:', error);
-        res.status(500).json({ error: 'Failed to get job' });
+        console.error('Error getting job details:', error);
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to get job details',
+        });
     }
 });
 
 /**
  * POST /api/v1/jobs/:id/hire
- * Initiate the hiring process by creating a payment invoice
+ * Create Beep invoice for job payment
  * 
- * This endpoint:
- * 1. Validates the job can be hired
- * 2. Creates a Beep Pay invoice
- * 3. Returns payment URL and QR code
- * 
- * Returns:
- * - paymentUrl: URL for payment page
- * - qrCode: QR code for payment
- * - invoiceId: Invoice ID for tracking
- * - expiresAt: Invoice expiration time
- * 
- * TODO: Implement hire initiation
+ * Body:
+ * - generateQrCode: boolean (optional, default: true)
  */
-router.post('/:id/hire', authenticateWallet, async (req: Request, res: Response) => {
+router.post('/:id/hire', async (req: Request, res: Response) => {
     try {
         const jobId = parseInt(req.params.id);
+        const { generateQrCode = true } = req.body as HireBody;
 
-        // Validate job exists and is in 'unpaid' status
-        // const job = await getJobById(jobId);
-        // if (!job) {
-        //     return res.status(404).json({ error: 'Job not found' });
-        // }
-        // if (job.status !== 'unpaid') {
-        //     return res.status(400).json({ error: 'Job is not available for hire' });
-        // }
+        if (isNaN(jobId)) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'Invalid job ID',
+            });
+        }
 
-        // Create Beep invoice
+        const job = await queries.getJobById(jobId);
+
+        if (!job) {
+            return res.status(404).json({
+                status: 404,
+                error: true,
+                message: 'Job not found',
+            });
+        }
+
+        if (job.status !== 'unpaid') {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: `Cannot hire - job status is ${job.status}`,
+            });
+        }
+
+        // TODO: Create Beep invoice
+        // import { createInvoice } from '../services/beep.js';
+        // 
         // const invoice = await createInvoice({
         //     amount: job.amount_usdc,
         //     referenceKey: job.reference_key,
-        //     description: `BeepLancer Job: ${job.title}`,
-        //     expiresInMinutes: 30
+        //     description: `Payment for job: ${job.title}`,
+        //     generateQrCode,
+        // });
+        //
+        // // Update job with invoice ID
+        // await queries.updateJobStatus(jobId, 'unpaid', {
+        //     beep_invoice_id: invoice.id,
         // });
 
-        // Update job with invoice ID
-        // await updateJobWithInvoice(jobId, invoice.id);
-
-        // return res.json({
-        //     paymentUrl: invoice.paymentUrl,
-        //     qrCode: invoice.qrCode,
-        //     invoiceId: invoice.id,
-        //     expiresAt: invoice.expiresAt
-        // });
-
-        res.status(501).json({ error: 'Not implemented' });
+        res.json({
+            status: 200,
+            error: false,
+            message: 'Invoice created (TODO: implement Beep service)',
+            data: {
+                invoice: {
+                    // id: invoice.id,
+                    // paymentUrl: invoice.paymentUrl,
+                    // qrCode: invoice.qrCode,
+                    amount: job.amount_usdc,
+                    referenceKey: job.reference_key,
+                },
+            },
+        });
     } catch (error) {
-        console.error('Error initiating hire:', error);
-        res.status(500).json({ error: 'Failed to initiate hire' });
+        console.error('Error creating invoice:', error);
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to create invoice',
+        });
+    }
+});
+
+/**
+ * POST /api/v1/jobs/:id/delivery
+ * Submit job delivery (agent only)
+ * 
+ * Body:
+ * - content: string (the actual work result)
+ * - deliveryType: 'code' | 'document' | 'link' | 'text'
+ * - externalUrl: string (optional, for large files)
+ * - notes: string (optional)
+ */
+router.post('/:id/delivery', async (req: Request, res: Response) => {
+    try {
+        const jobId = parseInt(req.params.id);
+        const { content, deliveryType = 'text', externalUrl, notes } = 
+            req.body as DeliveryBody;
+
+        if (isNaN(jobId)) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'Invalid job ID',
+            });
+        }
+
+        if (!content) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'content is required',
+            });
+        }
+
+        const job = await queries.getJobById(jobId);
+
+        if (!job) {
+            return res.status(404).json({
+                status: 404,
+                error: true,
+                message: 'Job not found',
+            });
+        }
+
+        if (job.status !== 'working' && job.status !== 'escrowed') {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: `Cannot submit delivery - job status is ${job.status}`,
+            });
+        }
+
+        // TODO: Save delivery to job_deliveries table
+        // const delivery = await queries.createDelivery({
+        //     job_id: jobId,
+        //     content,
+        //     delivery_type: deliveryType,
+        //     external_url: externalUrl,
+        //     notes,
+        // });
+
+        // Update job status to 'delivered'
+        await queries.updateJobStatus(jobId, 'delivered');
+
+        res.json({
+            status: 200,
+            error: false,
+            message: 'Delivery submitted successfully (TODO: implement createDelivery)',
+            data: {
+                jobId,
+                delivery: {
+                    // id: delivery.id,
+                    content: content.substring(0, 100) + '...', // Preview
+                    deliveryType,
+                    externalUrl,
+                    notes,
+                    submittedAt: new Date().toISOString(),
+                },
+            },
+        });
+    } catch (error) {
+        console.error('Error submitting delivery:', error);
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to submit delivery',
+        });
     }
 });
 
 /**
  * POST /api/v1/jobs/:id/approve
- * Approve the delivered work and release funds to agent
+ * Approve delivery and release escrow (buyer only)
  * 
- * This endpoint:
- * 1. Validates the job is in 'delivered' status
- * 2. Validates the caller is the buyer
- * 3. Releases escrow on SUI blockchain
- * 4. Triggers Beep payout to agent
- * 
- * Returns:
- * - txDigest: SUI transaction digest
- * - payoutId: Beep payout ID
- * 
- * TODO: Implement work approval
+ * Body:
+ * - approved: boolean
+ * - feedback: string (optional)
  */
-router.post('/:id/approve', authenticateWallet, async (req: Request, res: Response) => {
+router.post('/:id/approve', async (req: Request, res: Response) => {
     try {
         const jobId = parseInt(req.params.id);
+        const { approved, feedback } = req.body as ApproveBody;
 
-        // Validate job status is 'delivered'
-        // const job = await getJobById(jobId);
-        // if (!job || job.status !== 'delivered') {
-        //     return res.status(400).json({ error: 'Job is not ready for approval' });
-        // }
+        if (isNaN(jobId)) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'Invalid job ID',
+            });
+        }
 
-        // Validate caller is the buyer
-        // const callerWallet = req.user.walletAddress;
-        // if (job.buyer_wallet !== callerWallet) {
-        //     return res.status(403).json({ error: 'Only the buyer can approve' });
-        // }
+        if (typeof approved !== 'boolean') {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'approved (boolean) is required',
+            });
+        }
 
-        // Update status to completed
-        // await updateJobStatus(jobId, 'completed');
+        const job = await queries.getJobById(jobId);
 
-        // Build transaction for client-side signing
-        // const txBytes = await buildClientTransaction(job.escrow_object_id, 'release');
+        if (!job) {
+            return res.status(404).json({
+                status: 404,
+                error: true,
+                message: 'Job not found',
+            });
+        }
 
-        // return res.json({
-        //     message: 'Transaction ready for signing',
-        //     transaction: txBytes,
-        //     escrowObjectId: job.escrow_object_id
-        // });
+        if (job.status !== 'delivered') {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: `Cannot approve - job must be 'delivered', current: ${job.status}`,
+            });
+        }
 
-        // OR: If platform signs (using sponsor mechanism)
-        // const releaseResult = await releaseEscrow({ ... });
-        // const payoutResult = await createPayout({ ... });
-        // await updateJobStatus(jobId, 'paid_out', { release_tx_digest: releaseResult.txDigest });
+        if (approved) {
+            // TODO: Release escrow on SUI blockchain
+            // import { releaseEscrow } from '../services/sui.js';
+            // 
+            // const txDigest = await releaseEscrow({
+            //     escrowObjectId: job.escrow_object_id!,
+            // });
 
-        res.status(501).json({ error: 'Not implemented' });
+            // Update job status to 'completed'
+            await queries.updateJobStatus(jobId, 'completed', {
+                // release_tx_digest: txDigest,
+            });
+
+            // TODO: Trigger payout via Beep
+            // import { createPayout } from '../services/beep.js';
+            // await createPayout({
+            //     amount: job.amount_usdc,
+            //     recipientAddress: agentWallet,
+            // });
+
+            res.json({
+                status: 200,
+                error: false,
+                message: 'Delivery approved, escrow release initiated (TODO: implement SUI service)',
+                data: {
+                    jobId,
+                    status: 'completed',
+                    feedback,
+                },
+            });
+        } else {
+            // Rejected - request revision
+            await queries.updateJobStatus(jobId, 'working');
+
+            res.json({
+                status: 200,
+                error: false,
+                message: 'Delivery rejected, requesting revision',
+                data: {
+                    jobId,
+                    status: 'working',
+                    feedback,
+                },
+            });
+        }
     } catch (error) {
-        console.error('Error approving job:', error);
-        res.status(500).json({ error: 'Failed to approve job' });
+        console.error('Error approving delivery:', error);
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to approve delivery',
+        });
     }
 });
 
 /**
  * POST /api/v1/jobs/:id/cancel
- * Cancel a job and refund the buyer
- * 
- * Conditions:
- * - Job must be in 'unpaid' or 'escrowed' status
- * - Only buyer can cancel
- * - If escrowed, triggers escrow cancellation on-chain
- * 
- * TODO: Implement job cancellation
+ * Cancel job and refund buyer
  */
-router.post('/:id/cancel', authenticateWallet, async (req: Request, res: Response) => {
+router.post('/:id/cancel', async (req: Request, res: Response) => {
     try {
         const jobId = parseInt(req.params.id);
 
-        // Validate job can be cancelled
-        // Only 'unpaid' or 'escrowed' jobs can be cancelled
-        // 'working' jobs may require dispute resolution
+        if (isNaN(jobId)) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'Invalid job ID',
+            });
+        }
 
-        // const job = await getJobById(jobId);
-        // if (!['unpaid', 'escrowed'].includes(job.status)) {
-        //     return res.status(400).json({ error: 'Job cannot be cancelled at this stage' });
+        const job = await queries.getJobById(jobId);
+
+        if (!job) {
+            return res.status(404).json({
+                status: 404,
+                error: true,
+                message: 'Job not found',
+            });
+        }
+
+        // Only allow cancellation if not yet paid out
+        if (job.status === 'paid_out' || job.status === 'completed') {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: `Cannot cancel - job is already ${job.status}`,
+            });
+        }
+
+        // TODO: Cancel escrow if exists
+        // if (job.escrow_object_id) {
+        //     import { cancelEscrow } from '../services/sui.js';
+        //     await cancelEscrow({
+        //         escrowObjectId: job.escrow_object_id,
+        //     });
         // }
 
-        // If escrowed, cancel on-chain
-        // if (job.status === 'escrowed' && job.escrow_object_id) {
-        //     const txBytes = await buildClientTransaction(job.escrow_object_id, 'cancel');
-        //     return res.json({ transaction: txBytes });
-        // }
+        await queries.updateJobStatus(jobId, 'cancelled');
 
-        // If just unpaid, update status
-        // await updateJobStatus(jobId, 'cancelled');
-
-        // return res.json({ message: 'Job cancelled' });
-
-        res.status(501).json({ error: 'Not implemented' });
+        res.json({
+            status: 200,
+            error: false,
+            message: 'Job cancelled successfully (TODO: implement cancelEscrow if needed)',
+            data: {
+                jobId,
+                status: 'cancelled',
+            },
+        });
     } catch (error) {
         console.error('Error cancelling job:', error);
-        res.status(500).json({ error: 'Failed to cancel job' });
-    }
-});
-
-/**
- * GET /api/v1/jobs/:id/delivery
- * Get the delivery/result for a completed job
- * 
- * Returns:
- * - Delivery content (code, text, or link)
- * - Delivery metadata
- * 
- * TODO: Implement delivery retrieval
- */
-router.get('/:id/delivery', async (req: Request, res: Response) => {
-    try {
-        const jobId = parseInt(req.params.id);
-
-        // Validate job has delivery
-        // const job = await getJobById(jobId);
-        // if (!job || !['delivered', 'completed', 'paid_out'].includes(job.status)) {
-        //     return res.status(404).json({ error: 'No delivery available' });
-        // }
-
-        // Get delivery content
-        // const delivery = await getDeliveryByJobId(jobId);
-
-        // return res.json({ delivery });
-
-        res.status(501).json({ error: 'Not implemented' });
-    } catch (error) {
-        console.error('Error getting delivery:', error);
-        res.status(500).json({ error: 'Failed to get delivery' });
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to cancel job',
+        });
     }
 });
 

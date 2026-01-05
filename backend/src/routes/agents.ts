@@ -1,20 +1,21 @@
 /**
  * =============================================================================
- * Agents Routes - API Endpoints for Agent Management
+ * Agents Routes - API Endpoints for AI Agent Management
  * =============================================================================
  * 
  * Endpoints:
- * - GET    /api/v1/agents          - List available agents
- * - GET    /api/v1/agents/:id      - Get agent details
- * - POST   /api/v1/agents/register - Register as an agent
- * - PUT    /api/v1/agents/:id      - Update agent profile
- * - GET    /api/v1/agents/:id/jobs - Get agent's jobs
- * - POST   /api/v1/agents/:id/availability - Toggle availability
+ * - GET    /api/v1/agents           - List all available agents
+ * - GET    /api/v1/agents/:id       - Get agent details
+ * - POST   /api/v1/agents           - Register as an agent
+ * - PUT    /api/v1/agents/:id       - Update agent profile
+ * - GET    /api/v1/agents/:id/jobs  - Get jobs for an agent
+ * - POST   /api/v1/agents/:id/skills - Update agent skills
  * 
  * =============================================================================
  */
 
-import { Router, Request, Response, NextFunction } from 'express';
+import { Router, Request, Response } from 'express';
+import * as queries from '../db/queries.js';
 
 const router = Router();
 
@@ -23,6 +24,7 @@ const router = Router();
 // =============================================================================
 
 interface RegisterAgentBody {
+    userId: number;
     mcpEndpoint: string;
     skills: string[];
     hourlyRate?: number;
@@ -30,29 +32,10 @@ interface RegisterAgentBody {
 }
 
 interface UpdateAgentBody {
-    mcpEndpoint?: string;
     skills?: string[];
     hourlyRate?: number;
     description?: string;
     isAvailable?: boolean;
-}
-
-// =============================================================================
-// MIDDLEWARE
-// =============================================================================
-
-/**
- * Authentication middleware for agent routes
- * 
- * TODO: Implement proper wallet authentication
- */
-async function authenticateWallet(req: Request, res: Response, next: NextFunction) {
-    // const walletAddress = req.headers['x-wallet-address'] as string;
-    // if (!walletAddress) {
-    //     return res.status(401).json({ error: 'Authentication required' });
-    // }
-    // req.user = { walletAddress };
-    next();
 }
 
 // =============================================================================
@@ -61,156 +44,204 @@ async function authenticateWallet(req: Request, res: Response, next: NextFunctio
 
 /**
  * GET /api/v1/agents
- * List all available agents
+ * List all available agents with optional filters
  * 
  * Query params:
- * - skill: Filter by skill
- * - available: Filter by availability (true/false)
- * - minRating: Minimum rating filter
- * - page, limit: Pagination
- * 
- * Returns:
- * - Array of agents with their skills and ratings
- * 
- * TODO: Implement agent listing
+ * - skill: Filter by skill (e.g., ?skill=TypeScript)
+ * - minRating: Minimum rating (e.g., ?minRating=4.5)
+ * - maxRate: Maximum hourly rate (e.g., ?maxRate=100)
  */
 router.get('/', async (req: Request, res: Response) => {
     try {
-        const { skill, available, minRating, page, limit } = req.query;
+        const { skill, minRating, maxRate } = req.query;
 
-        // Build filter criteria
-        // const filters = {
-        //     skill: skill as string,
-        //     available: available === 'true',
-        //     minRating: minRating ? parseFloat(minRating as string) : undefined
-        // };
+        let agents;
 
-        // Get available agents
-        // const agents = await getAvailableAgents(filters);
+        if (skill) {
+            // Filter by specific skill
+            agents = await queries.findAgentsBySkill(skill as string);
+        } else {
+            // Get all available agents
+            agents = await queries.getAvailableAgents();
+        }
 
-        // return res.json({
-        //     agents,
-        //     pagination: { page: 1, limit: 20, total: agents.length }
-        // });
+        // Apply additional filters
+        let filteredAgents = agents;
 
-        res.status(501).json({ error: 'Not implemented' });
+        if (minRating) {
+            const minRatingNum = parseFloat(minRating as string);
+            filteredAgents = filteredAgents.filter(a => a.rating >= minRatingNum);
+        }
+
+        if (maxRate) {
+            const maxRateNum = parseFloat(maxRate as string);
+            filteredAgents = filteredAgents.filter(a => 
+                a.hourly_rate !== null && a.hourly_rate <= maxRateNum
+            );
+        }
+
+        res.json({
+            status: 200,
+            error: false,
+            message: `Found ${filteredAgents.length} agents`,
+            data: {
+                agents: filteredAgents.map(agent => ({
+                    id: agent.id,
+                    userId: agent.user_id,
+                    walletAddress: agent.wallet_address,
+                    skills: agent.skills,
+                    hourlyRate: agent.hourly_rate,
+                    description: agent.description,
+                    rating: agent.rating,
+                    jobsCompleted: agent.jobs_completed,
+                    isAvailable: agent.is_available,
+                    mcpEndpoint: agent.mcp_endpoint,
+                })),
+                count: filteredAgents.length,
+            },
+        });
     } catch (error) {
         console.error('Error listing agents:', error);
-        res.status(500).json({ error: 'Failed to list agents' });
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to list agents',
+        });
     }
 });
 
 /**
  * GET /api/v1/agents/:id
- * Get detailed agent information
- * 
- * Returns:
- * - Agent profile
- * - Skills list
- * - Rating and job history stats
- * 
- * TODO: Implement agent detail retrieval
+ * Get detailed information about a specific agent
  */
 router.get('/:id', async (req: Request, res: Response) => {
     try {
         const agentId = parseInt(req.params.id);
 
-        // if (isNaN(agentId)) {
-        //     return res.status(400).json({ error: 'Invalid agent ID' });
-        // }
+        if (isNaN(agentId)) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'Invalid agent ID',
+            });
+        }
 
-        // const agent = await getAgentById(agentId);
+        // TODO: Implement getAgentById query
+        // const agent = await queries.getAgentById(agentId);
 
         // if (!agent) {
-        //     return res.status(404).json({ error: 'Agent not found' });
+        //     return res.status(404).json({
+        //         status: 404,
+        //         error: true,
+        //         message: 'Agent not found',
+        //     });
         // }
 
-        // return res.json({ agent });
+        // TODO: Get agent statistics
+        // const stats = {
+        //     totalEarnings: await queries.getAgentTotalEarnings(agentId),
+        //     completedJobs: agent.jobs_completed,
+        //     activeJobs: await queries.countActiveJobsByAgent(agentId),
+        // };
 
-        res.status(501).json({ error: 'Not implemented' });
+        res.json({
+            status: 200,
+            error: false,
+            message: 'Agent details retrieved (TODO: implement getAgentById)',
+            data: {
+                agent: {
+                    id: agentId,
+                    // ...agent details
+                },
+                // stats,
+            },
+        });
     } catch (error) {
-        console.error('Error getting agent:', error);
-        res.status(500).json({ error: 'Failed to get agent' });
+        console.error('Error getting agent details:', error);
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to get agent details',
+        });
     }
 });
 
 /**
- * POST /api/v1/agents/register
- * Register as a new agent
+ * POST /api/v1/agents
+ * Register a new AI agent
  * 
  * Body:
- * - mcpEndpoint: string (required) - URL of agent's MCP server
- * - skills: string[] (required) - List of skills offered
- * - hourlyRate: number - Rate in USDC per hour
- * - description: string - Agent description
- * 
- * Returns:
- * - Created agent profile
- * 
- * WORKFLOW:
- * 1. Create/update user with role='agent'
- * 2. Create agent profile with MCP endpoint
- * 3. Verify MCP endpoint is reachable
- * 
- * TODO: Implement agent registration
+ * - userId: number (user must exist and have role 'agent')
+ * - mcpEndpoint: string (MCP server URL)
+ * - skills: string[] (list of skills)
+ * - hourlyRate: number (optional)
+ * - description: string (optional)
  */
-router.post('/register', authenticateWallet, async (req: Request, res: Response) => {
+router.post('/', async (req: Request, res: Response) => {
     try {
-        const body = req.body as RegisterAgentBody;
+        const { userId, mcpEndpoint, skills, hourlyRate, description } = 
+            req.body as RegisterAgentBody;
 
         // Validate required fields
-        // if (!body.mcpEndpoint || !body.skills || body.skills.length === 0) {
-        //     return res.status(400).json({ 
-        //         error: 'mcpEndpoint and at least one skill are required' 
+        if (!userId || !mcpEndpoint || !skills || skills.length === 0) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'userId, mcpEndpoint, and skills are required',
+            });
+        }
+
+        // Validate MCP endpoint format
+        if (!mcpEndpoint.startsWith('http://') && !mcpEndpoint.startsWith('https://')) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'mcpEndpoint must be a valid HTTP(S) URL',
+            });
+        }
+
+        // TODO: Verify user exists and has role 'agent'
+        // const user = await queries.getUserById(userId);
+        // if (!user || user.role !== 'agent') {
+        //     return res.status(400).json({
+        //         status: 400,
+        //         error: true,
+        //         message: 'User not found or not an agent',
         //     });
         // }
 
-        // Validate MCP endpoint format
-        // try {
-        //     new URL(body.mcpEndpoint);
-        // } catch {
-        //     return res.status(400).json({ error: 'Invalid MCP endpoint URL' });
-        // }
+        // Register agent
+        const agent = await queries.registerAgent(
+            userId,
+            mcpEndpoint,
+            skills,
+            hourlyRate,
+            description
+        );
 
-        // Get caller's wallet
-        // const walletAddress = req.user.walletAddress;
-
-        // Create or get user with agent role
-        // let user = await findUserByWallet(walletAddress);
-        // if (!user) {
-        //     user = await createUser(walletAddress, 'agent');
-        // } else if (user.role !== 'agent') {
-        //     // Update user role to agent
-        //     user = await updateUserRole(user.id, 'agent');
-        // }
-
-        // Check if already registered as agent
-        // const existingAgent = await getAgentByUserId(user.id);
-        // if (existingAgent) {
-        //     return res.status(400).json({ error: 'Already registered as agent' });
-        // }
-
-        // Optional: Verify MCP endpoint is reachable
-        // const isReachable = await verifyMcpEndpoint(body.mcpEndpoint);
-        // if (!isReachable) {
-        //     return res.status(400).json({ error: 'MCP endpoint is not reachable' });
-        // }
-
-        // Register the agent
-        // const agent = await registerAgent(
-        //     user.id,
-        //     body.mcpEndpoint,
-        //     body.skills,
-        //     body.hourlyRate,
-        //     body.description
-        // );
-
-        // return res.status(201).json({ agent });
-
-        res.status(501).json({ error: 'Not implemented' });
+        res.status(201).json({
+            status: 201,
+            error: false,
+            message: 'Agent registered successfully',
+            data: {
+                agent: {
+                    id: agent.id,
+                    userId: agent.user_id,
+                    mcpEndpoint: agent.mcp_endpoint,
+                    skills: agent.skills,
+                    hourlyRate: agent.hourly_rate,
+                    description: agent.description,
+                    createdAt: agent.created_at,
+                },
+            },
+        });
     } catch (error) {
         console.error('Error registering agent:', error);
-        res.status(500).json({ error: 'Failed to register agent' });
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to register agent',
+        });
     }
 });
 
@@ -218,120 +249,163 @@ router.post('/register', authenticateWallet, async (req: Request, res: Response)
  * PUT /api/v1/agents/:id
  * Update agent profile
  * 
- * Body (all optional):
- * - mcpEndpoint: string
- * - skills: string[]
- * - hourlyRate: number
- * - description: string
- * - isAvailable: boolean
- * 
- * TODO: Implement agent update
+ * Body:
+ * - skills: string[] (optional)
+ * - hourlyRate: number (optional)
+ * - description: string (optional)
+ * - isAvailable: boolean (optional)
  */
-router.put('/:id', authenticateWallet, async (req: Request, res: Response) => {
+router.put('/:id', async (req: Request, res: Response) => {
     try {
         const agentId = parseInt(req.params.id);
-        const body = req.body as UpdateAgentBody;
+        const { skills, hourlyRate, description, isAvailable } = 
+            req.body as UpdateAgentBody;
 
-        // Verify caller owns this agent
-        // const agent = await getAgentById(agentId);
-        // if (!agent) {
-        //     return res.status(404).json({ error: 'Agent not found' });
-        // }
+        if (isNaN(agentId)) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'Invalid agent ID',
+            });
+        }
 
-        // const agentUser = await getUserById(agent.user_id);
-        // if (agentUser.wallet_address !== req.user.walletAddress) {
-        //     return res.status(403).json({ error: 'Not authorized' });
-        // }
+        // TODO: Implement updateAgent query
+        // const updatedAgent = await queries.updateAgent(agentId, {
+        //     skills,
+        //     hourly_rate: hourlyRate,
+        //     description,
+        //     is_available: isAvailable,
+        // });
 
-        // Update agent
-        // const updatedAgent = await updateAgent(agentId, body);
-
-        // return res.json({ agent: updatedAgent });
-
-        res.status(501).json({ error: 'Not implemented' });
+        res.json({
+            status: 200,
+            error: false,
+            message: 'Agent updated successfully (TODO: implement updateAgent)',
+            data: {
+                updated: {
+                    agentId,
+                    skills,
+                    hourlyRate,
+                    description,
+                    isAvailable,
+                },
+            },
+        });
     } catch (error) {
         console.error('Error updating agent:', error);
-        res.status(500).json({ error: 'Failed to update agent' });
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to update agent',
+        });
     }
 });
 
 /**
  * GET /api/v1/agents/:id/jobs
- * Get jobs for a specific agent
+ * Get all jobs assigned to this agent
  * 
  * Query params:
- * - status: Filter by status
- * - page, limit: Pagination
- * 
- * TODO: Implement agent jobs listing
+ * - status: Filter by job status (e.g., ?status=working)
  */
 router.get('/:id/jobs', async (req: Request, res: Response) => {
     try {
         const agentId = parseInt(req.params.id);
-        const { status, page, limit } = req.query;
+        const { status } = req.query;
 
-        // Get agent's user_id
-        // const agent = await getAgentById(agentId);
-        // if (!agent) {
-        //     return res.status(404).json({ error: 'Agent not found' });
-        // }
+        if (isNaN(agentId)) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'Invalid agent ID',
+            });
+        }
 
-        // Get jobs
-        // const jobs = await getJobsByAgent(agent.user_id, status as string);
+        // TODO: Get user_id from agent_id
+        // const agent = await queries.getAgentById(agentId);
+        // const userId = agent.user_id;
 
-        // return res.json({ jobs });
+        // For now, use agentId as userId (TODO: fix this)
+        const jobs = await queries.getJobsByAgent(
+            agentId,
+            status as any
+        );
 
-        res.status(501).json({ error: 'Not implemented' });
+        res.json({
+            status: 200,
+            error: false,
+            message: `Found ${jobs.length} jobs for agent`,
+            data: {
+                jobs: jobs.map(job => ({
+                    id: job.id,
+                    title: job.title,
+                    requirements: job.requirements,
+                    amountUsdc: job.amount_usdc,
+                    status: job.status,
+                    createdAt: job.created_at,
+                    deliveredAt: job.delivered_at,
+                    escrowObjectId: job.escrow_object_id,
+                })),
+                count: jobs.length,
+            },
+        });
     } catch (error) {
         console.error('Error getting agent jobs:', error);
-        res.status(500).json({ error: 'Failed to get agent jobs' });
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to get agent jobs',
+        });
     }
 });
 
 /**
- * POST /api/v1/agents/:id/availability
- * Toggle agent availability
+ * POST /api/v1/agents/:id/skills
+ * Update agent skills (convenience endpoint)
  * 
  * Body:
- * - available: boolean
- * 
- * TODO: Implement availability toggle
+ * - skills: string[]
  */
-router.post('/:id/availability', authenticateWallet, async (req: Request, res: Response) => {
+router.post('/:id/skills', async (req: Request, res: Response) => {
     try {
         const agentId = parseInt(req.params.id);
-        const { available } = req.body;
+        const { skills } = req.body;
 
-        // Verify ownership and update
-        // ...
+        if (isNaN(agentId)) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'Invalid agent ID',
+            });
+        }
 
-        res.status(501).json({ error: 'Not implemented' });
+        if (!skills || !Array.isArray(skills) || skills.length === 0) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'skills must be a non-empty array',
+            });
+        }
+
+        // TODO: Implement updateAgentSkills query
+        // await queries.updateAgentSkills(agentId, skills);
+
+        res.json({
+            status: 200,
+            error: false,
+            message: 'Agent skills updated (TODO: implement updateAgentSkills)',
+            data: {
+                agentId,
+                skills,
+            },
+        });
     } catch (error) {
-        console.error('Error updating availability:', error);
-        res.status(500).json({ error: 'Failed to update availability' });
-    }
-});
-
-/**
- * GET /api/v1/agents/skills
- * Get all available skills in the marketplace
- * 
- * Returns:
- * - List of unique skills with agent counts
- * 
- * TODO: Implement skills aggregation
- */
-router.get('/skills', async (req: Request, res: Response) => {
-    try {
-        // Aggregate skills from all agents
-        // const skills = await getAggregatedSkills();
-
-        // return res.json({ skills });
-
-        res.status(501).json({ error: 'Not implemented' });
-    } catch (error) {
-        console.error('Error getting skills:', error);
-        res.status(500).json({ error: 'Failed to get skills' });
+        console.error('Error updating agent skills:', error);
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to update agent skills',
+        });
     }
 });
 

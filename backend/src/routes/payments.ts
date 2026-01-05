@@ -1,18 +1,19 @@
 /**
- * =============================================================================
- * Payments Routes - API Endpoints for Payment Operations
+ * ===========================================================================
+ * Payments Routes - API Endpoints for Payment Processing
  * =============================================================================
  * 
  * Endpoints:
- * - POST   /api/v1/payments/invoice     - Create a new invoice
- * - GET    /api/v1/payments/invoice/:id - Get invoice status
- * - POST   /api/v1/payments/webhook     - Beep payment webhook
- * - GET    /api/v1/payments/history     - Get payment history
+ * - POST   /api/v1/payments/invoices        - Create payment invoice
+ * - GET    /api/v1/payments/invoices/:id    - Get invoice status
+ * - POST   /api/v1/payments/webhooks/beep   - Beep webhook handler
+ * - GET    /api/v1/payments/history          - Payment history
  * 
  * =============================================================================
  */
 
-import { Router, Request, Response, NextFunction } from 'express';
+import { Router, Request, Response } from 'express';
+import * as queries from '../db/queries.js';
 
 const router = Router();
 
@@ -22,48 +23,17 @@ const router = Router();
 
 interface CreateInvoiceBody {
     jobId: number;
+    amount: number;
+    generateQrCode?: boolean;
 }
 
 interface BeepWebhookPayload {
-    event: 'invoice.paid' | 'invoice.expired' | 'payout.completed' | 'payout.failed';
-    data: {
-        id: string;
-        referenceKey: string;
-        amount: number;
-        status: string;
-        [key: string]: any;
-    };
-    timestamp: string;
-    signature: string;
-}
-
-// =============================================================================
-// MIDDLEWARE
-// =============================================================================
-
-/**
- * Verify Beep webhook signature
- * 
- * TODO: Implement signature verification
- */
-async function verifyWebhookSignature(req: Request, res: Response, next: NextFunction) {
-    // const signature = req.headers['x-beep-signature'] as string;
-    // const payload = JSON.stringify(req.body);
-    // const secret = process.env.BEEP_WEBHOOK_SECRET;
-
-    // if (!signature || !secret) {
-    //     return res.status(401).json({ error: 'Invalid signature' });
-    // }
-
-    // const expectedSignature = createHmac('sha256', secret)
-    //     .update(payload)
-    //     .digest('hex');
-
-    // if (signature !== expectedSignature) {
-    //     return res.status(401).json({ error: 'Signature mismatch' });
-    // }
-
-    next();
+    event: string;
+    invoiceId: string;
+    referenceKey: string;
+    status: string;
+    amount: number;
+    signature: string; // For webhook verification
 }
 
 // =============================================================================
@@ -71,225 +41,338 @@ async function verifyWebhookSignature(req: Request, res: Response, next: NextFun
 // =============================================================================
 
 /**
- * POST /api/v1/payments/invoice
+ * POST /api/v1/payments/invoices
  * Create a payment invoice for a job
  * 
  * Body:
- * - jobId: number (required)
- * 
- * Returns:
- * - invoiceId: Beep invoice ID
- * - paymentUrl: URL for payment
- * - qrCode: QR code data URL
- * - expiresAt: Expiration timestamp
- * 
- * TODO: Implement invoice creation
+ * - jobId: number
+ * - amount: number
+ * - generateQrCode: boolean (optional, default: true)
  */
-router.post('/invoice', async (req: Request, res: Response) => {
+router.post('/invoices', async (req: Request, res: Response) => {
     try {
-        const { jobId } = req.body as CreateInvoiceBody;
+        const { jobId, amount, generateQrCode = true } = req.body as CreateInvoiceBody;
 
-        // Validate job exists and is unpaid
-        // const job = await getJobById(jobId);
-        // if (!job) {
-        //     return res.status(404).json({ error: 'Job not found' });
-        // }
-        // if (job.status !== 'unpaid') {
-        //     return res.status(400).json({ error: 'Job already has payment' });
-        // }
+        // Validate
+        if (!jobId || !amount) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'jobId and amount are required',
+            });
+        }
 
-        // Create Beep invoice
+        if (amount <= 0) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'amount must be greater than 0',
+            });
+        }
+
+        // Get job
+        const job = await queries.getJobById(jobId);
+
+        if (!job) {
+            return res.status(404).json({
+                status: 404,
+                error: true,
+                message: 'Job not found',
+            });
+        }
+
+        if (job.status !== 'unpaid') {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: `Job status must be 'unpaid', current: ${job.status}`,
+            });
+        }
+
+        // TODO: Create Beep invoice
+        // import { createInvoice } from '../services/beep.js';
+        // 
         // const invoice = await createInvoice({
-        //     amount: job.amount_usdc,
+        //     amount,
         //     referenceKey: job.reference_key,
-        //     description: `BeepLancer: ${job.title}`,
-        //     webhookUrl: `${process.env.BASE_URL}/api/v1/payments/webhook`
+        //     description: `Payment for: ${job.title}`,
+        //     generateQrCode,
+        // });
+        //
+        // // Update job with invoice ID
+        // await queries.updateJobStatus(jobId, 'unpaid', {
+        //     beep_invoice_id: invoice.id,
         // });
 
-        // Update job with invoice ID
-        // await updateJobWithInvoice(jobId, invoice.id);
-
-        // return res.json({
-        //     invoiceId: invoice.id,
-        //     paymentUrl: invoice.paymentUrl,
-        //     qrCode: invoice.qrCode,
-        //     expiresAt: invoice.expiresAt,
-        //     amount: invoice.amount
-        // });
-
-        res.status(501).json({ error: 'Not implemented' });
+        res.json({
+            status: 200,
+            error: false,
+            message: 'Invoice created (TODO: implement Beep service)',
+            data: {
+                invoice: {
+                    // id: invoice.id,
+                    jobId,
+                    amount,
+                    referenceKey: job.reference_key,
+                    // paymentUrl: invoice.paymentUrl,
+                    // qrCode: invoice.qrCode,
+                    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24h
+                },
+            },
+        });
     } catch (error) {
         console.error('Error creating invoice:', error);
-        res.status(500).json({ error: 'Failed to create invoice' });
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to create invoice',
+        });
     }
 });
 
 /**
- * GET /api/v1/payments/invoice/:id
+ * GET /api/v1/payments/invoices/:id
  * Get invoice status
- * 
- * Returns:
- * - Invoice details with current status
- * 
- * TODO: Implement invoice status check
  */
-router.get('/invoice/:id', async (req: Request, res: Response) => {
+router.get('/invoices/:id', async (req: Request, res: Response) => {
     try {
-        const invoiceId = req.params.id;
+        const { id } = req.params;
 
-        // Get invoice from Beep
-        // const invoice = await getInvoice(invoiceId);
+        // TODO: Get invoice from Beep
+        // import { getInvoiceStatus } from '../services/beep.js';
+        // 
+        // const invoice = await getInvoiceStatus(id);
+        //
+        // if (!invoice) {
+        //     return res.status(404).json({
+        //         status: 404,
+        //         error: true,
+        //         message: 'Invoice not found',
+        //     });
+        // }
 
-        // return res.json({ invoice });
-
-        res.status(501).json({ error: 'Not implemented' });
+        res.json({
+            status: 200,
+            error: false,
+            message: 'Invoice status retrieved (TODO: implement Beep service)',
+            data: {
+                invoice: {
+                    id,
+                    // status: invoice.status,
+                    // amount: invoice.amount,
+                    // paidAt: invoice.paidAt,
+                },
+            },
+        });
     } catch (error) {
-        console.error('Error getting invoice:', error);
-        res.status(500).json({ error: 'Failed to get invoice' });
+        console.error('Error getting invoice status:', error);
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to get invoice status',
+        });
     }
 });
 
 /**
- * POST /api/v1/payments/webhook
- * Handle Beep payment webhooks
+ * POST /api/v1/payments/webhooks/beep
+ * Webhook handler for Beep payment notifications
  * 
- * Events:
- * - invoice.paid: Payment received, trigger escrow
- * - invoice.expired: Payment expired, cancel job
- * - payout.completed: Payout successful, finalize job
- * - payout.failed: Payout failed, need manual intervention
- * 
- * TODO: Implement webhook handling
+ * This endpoint is called by Beep when:
+ * - Invoice is paid
+ * - Payment is confirmed
+ * - Payout is completed
  */
-router.post('/webhook', verifyWebhookSignature, async (req: Request, res: Response) => {
+router.post('/webhooks/beep', async (req: Request, res: Response) => {
     try {
         const payload = req.body as BeepWebhookPayload;
 
-        console.log('[Webhook] Received event:', payload.event);
+        console.log('[Beep Webhook] Received event:', payload.event);
 
-        // switch (payload.event) {
-        //     case 'invoice.paid':
-        //         await handleInvoicePaid(payload.data);
-        //         break;
-        //         
-        //     case 'invoice.expired':
-        //         await handleInvoiceExpired(payload.data);
-        //         break;
-        //         
-        //     case 'payout.completed':
-        //         await handlePayoutCompleted(payload.data);
-        //         break;
-        //         
-        //     case 'payout.failed':
-        //         await handlePayoutFailed(payload.data);
-        //         break;
-        //         
-        //     default:
-        //         console.log('[Webhook] Unknown event:', payload.event);
+        // TODO: Verify webhook signature
+        // import { verifyWebhookSignature } from '../services/beep.js';
+        // 
+        // const isValid = verifyWebhookSignature(payload, req.headers['x-beep-signature'] as string);
+        // if (!isValid) {
+        //     return res.status(401).json({
+        //         status: 401,
+        //         error: true,
+        //         message: 'Invalid webhook signature',
+        //     });
         // }
 
-        // Always return 200 to acknowledge receipt
-        res.json({ received: true });
+        // Handle different event types
+        if (payload.event === 'invoice.paid') {
+            // Find job by reference key
+            const job = await queries.getJobByReferenceKey(payload.referenceKey);
 
+            if (!job) {
+                console.error('[Beep Webhook] Job not found for reference:', payload.referenceKey);
+                return res.status(404).json({
+                    status: 404,
+                    error: true,
+                    message: 'Job not found',
+                });
+            }
+
+            if (job.status !== 'unpaid') {
+                console.warn('[Beep Webhook] Job already processed:', job.id, job.status);
+                return res.json({
+                    status: 200,
+                    error: false,
+                    message: 'Job already processed',
+                });
+            }
+
+            // TODO: Create escrow on SUI blockchain
+            // import { createEscrow } from '../services/sui.js';
+            // 
+            // const escrowResult = await createEscrow({
+            //     amount: job.amount_usdc,
+            //     agentAddress: job.agent_id ? getAgentWallet(job.agent_id) : null,
+            //     jobReference: job.reference_key,
+            // });
+
+            // Mark job as escrowed
+            await queries.markJobAsEscrowed(
+                job.id,
+                payload.invoiceId,
+                'MOCK_ESCROW_OBJECT_ID', // TODO: Use real escrowResult.escrowObjectId
+                'MOCK_TX_DIGEST' // TODO: Use real escrowResult.transactionDigest
+            );
+
+            // TODO: Trigger agent via MCP
+            // import { triggerAgent } from '../services/mcp-client.js';
+            // 
+            // if (job.agent_id) {
+            //     await triggerAgent({
+            //         agentId: job.agent_id,
+            //         jobId: job.id,
+            //         task: job.requirements,
+            //     });
+            // }
+
+            console.log('[Beep Webhook] Job escrowed successfully:', job.id);
+
+            return res.json({
+                status: 200,
+                error: false,
+                message: 'Payment processed and escrow created (TODO: implement SUI service)',
+                data: {
+                    jobId: job.id,
+                    status: 'esc rowed',
+                },
+            });
+        }
+
+        // Handle other webhook events
+        console.log('[Beep Webhook] Unhandled event type:', payload.event);
+
+        res.json({
+            status: 200,
+            error: false,
+            message: 'Webhook received',
+        });
     } catch (error) {
         console.error('Error processing webhook:', error);
-        // Still return 200 to prevent retries for processing errors
-        // Log the error for investigation
-        res.json({ received: true, error: 'Processing failed' });
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to process webhook',
+        });
     }
 });
 
 /**
  * GET /api/v1/payments/history
- * Get payment history for the authenticated user
+ * Get payment history for a user
  * 
  * Query params:
- * - type: 'all' | 'sent' | 'received'
- * - page, limit: Pagination
- * 
- * TODO: Implement payment history
+ * - userId: number
+ * - type: 'sent' | 'received' (optional)
  */
 router.get('/history', async (req: Request, res: Response) => {
     try {
-        // const { type = 'all', page = 1, limit = 20 } = req.query;
-        // const walletAddress = req.user.walletAddress;
+        const { userId, type } = req.query;
 
-        // Get payment history
-        // This would require joining jobs table with user filtering
-        // const payments = await getPaymentHistory(walletAddress, type, page, limit);
+        if (!userId) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'userId is required',
+            });
+        }
 
-        // return res.json({ payments });
+        const userIdNum = parseInt(userId as string);
 
-        res.status(501).json({ error: 'Not implemented' });
+        // Get jobs based on type
+        let jobs = [];
+
+        if (type === 'sent' || !type) {
+            const buyerJobs = await queries.getJobsByBuyer(userIdNum);
+            jobs.push(...buyerJobs);
+        }
+
+        if (type === 'received' || !type) {
+            const agentJobs = await queries.getJobsByAgent(userIdNum);
+            jobs.push(...agentJobs);
+        }
+
+        // Filter only paid/completed jobs
+        const paidJobs = jobs.filter(job => 
+            job.status === 'escrowed' || 
+            job.status === 'working' || 
+            job.status === 'delivered' || 
+            job.status === 'completed' || 
+            job.status === 'paid_out'
+        );
+
+        // Format payment history
+        const history = paidJobs.map(job => ({
+            jobId: job.id,
+            title: job.title,
+            amount: job.amount_usdc,
+            type: job.buyer_id === userIdNum ? 'sent' : 'received',
+            status: job.status,
+            paidAt: job.paid_at,
+            completedAt: job.completed_at,
+            escrowTxDigest: job.escrow_tx_digest,
+            releaseTxDigest: job.release_tx_digest,
+        }));
+
+        res.json({
+            status: 200,
+            error: false,
+            message: `Found ${history.length} payment records`,
+            data: {
+                history,
+                count: history.length,
+            },
+        });
     } catch (error) {
         console.error('Error getting payment history:', error);
-        res.status(500).json({ error: 'Failed to get payment history' });
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to get payment history',
+        });
     }
 });
 
 // =============================================================================
-// WEBHOOK HANDLERS
+// UTILITY FUNCTIONS
 // =============================================================================
 
 /**
- * Handle invoice.paid event
- * 
- * WORKFLOW:
- * 1. Find job by reference key
- * 2. Create escrow on SUI blockchain
- * 3. Update job status to 'escrowed'
- * 4. Trigger agent to start work
- * 
- * TODO: Implement paid handler
+ * Verify Beep webhook signature
+ * TODO: Implement with Beep SDK
  */
-async function handleInvoicePaid(data: BeepWebhookPayload['data']): Promise<void> {
-    // const job = await getJobByReferenceKey(data.referenceKey);
-    // if (!job) {
-    //     console.error('[Webhook] Job not found for reference:', data.referenceKey);
-    //     return;
-    // }
-
-    // await processPayment(job);
-
-    console.log('[Webhook] handleInvoicePaid - TODO: Implement');
-}
-
-/**
- * Handle invoice.expired event
- * 
- * TODO: Implement expired handler
- */
-async function handleInvoiceExpired(data: BeepWebhookPayload['data']): Promise<void> {
-    // const job = await getJobByReferenceKey(data.referenceKey);
-    // if (job && job.status === 'unpaid') {
-    //     await updateJobStatus(job.id, 'cancelled');
-    // }
-
-    console.log('[Webhook] handleInvoiceExpired - TODO: Implement');
-}
-
-/**
- * Handle payout.completed event
- * 
- * TODO: Implement payout completed handler
- */
-async function handlePayoutCompleted(data: BeepWebhookPayload['data']): Promise<void> {
-    // Mark job as fully paid out
-    // await updateJobStatusByPayoutId(data.id, 'paid_out');
-
-    console.log('[Webhook] handlePayoutCompleted - TODO: Implement');
-}
-
-/**
- * Handle payout.failed event
- * 
- * TODO: Implement payout failed handler
- */
-async function handlePayoutFailed(data: BeepWebhookPayload['data']): Promise<void> {
-    // Log error and possibly notify admin
-    // May need manual intervention to retry payout
-
-    console.log('[Webhook] handlePayoutFailed - TODO: Implement');
+function verifyWebhookSignature(payload: any, signature: string): boolean {
+    // Use Beep SDK to verify signature
+    // This prevents malicious webhook calls
+    
+    console.warn('[TODO] Webhook signature verification not implemented');
+    return true; // Accept all for MVP (INSECURE!)
 }
 
 export default router;

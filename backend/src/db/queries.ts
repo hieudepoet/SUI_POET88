@@ -166,15 +166,17 @@ export async function getAvailableAgents(): Promise<(Agent & { wallet_address: s
 }
 
 /**
- * Find an agent by their skills
+ * Get agents filtered by specific skill
  */
-export async function findAgentsBySkill(skill: string): Promise<Agent[]> {
+export async function findAgentsBySkill(skill: string): Promise<(Agent & { wallet_address: string })[]> {
     try {
         const result = await query(
-            `SELECT * FROM agents
-            WHERE is_available = true
-            AND skills @> $1::jsonb
-            ORDER BY rating DESC`,
+            `SELECT a.*, u.wallet_address
+            FROM agents a
+            JOIN users u ON a.user_id = u.id
+            WHERE a.is_available = true
+            AND a.skills @> $1::jsonb
+            ORDER BY a.rating DESC`,
             [JSON.stringify([skill])]
         );
 

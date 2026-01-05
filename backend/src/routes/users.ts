@@ -4,15 +4,16 @@
  * =============================================================================
  * 
  * Endpoints:
- * - GET    /api/v1/users/me       - Get current user profile
  * - POST   /api/v1/users/auth     - Authenticate/register with wallet
+ * - GET    /api/v1/users/me       - Get current user profile
  * - PUT    /api/v1/users/me       - Update user profile
- * - GET    /api/v1/users/:address - Get user by wallet address
+ * - GET    /api/v1/users/:address - Get public user by wallet address
  * 
  * =============================================================================
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
+import * as queries from '../db/queries.js';
 
 const router = Router();
 
@@ -22,13 +23,25 @@ const router = Router();
 
 interface AuthBody {
     walletAddress: string;
-    signature: string;
-    message: string;
+    signature?: string;
+    message?: string;
 }
 
 interface UpdateProfileBody {
     displayName?: string;
     email?: string;
+}
+
+// Extend Express Request to include user
+declare global {
+    namespace Express {
+        interface Request {
+            user?: {
+                walletAddress: string;
+                userId: number;
+            };
+        }
+    }
 }
 
 // =============================================================================
@@ -37,221 +50,285 @@ interface UpdateProfileBody {
 
 /**
  * Authentication middleware
- * 
- * TODO: Implement proper wallet authentication
+ * TODO: Implement proper signature verification
  */
 async function authenticateWallet(req: Request, res: Response, next: NextFunction) {
-    // const walletAddress = req.headers['x-wallet-address'] as string;
-    // if (!walletAddress) {
-    //     return res.status(401).json({ error: 'Authentication required' });
-    // }
-    // req.user = { walletAddress };
-    next();
+    try {
+        const walletAddress = req.headers['x-wallet-address'] as string;
+        
+        if (!walletAddress) {
+            return res.status(401).json({
+                status: 401,
+                error: true,
+                message: 'Authentication required - missing x-wallet-address header',
+            });
+        }
+
+        // Find user
+        const user = await queries.findUserByWallet(walletAddress);
+        
+        if (!user) {
+            return res.status(401).json({
+                status: 401,
+                error: true,
+                message: 'User not found - please authenticate first',
+            });
+        }
+
+        // Attach user to request
+        req.user = {
+            walletAddress: user.wallet_address,
+            userId: user.id,
+        };
+
+        next();
+    } catch (error) {
+        console.error('Authentication error:', error);
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Authentication failed',
+        });
+    }
 }
 
-// =============================================================================
-// ROUTES
-// =============================================================================
-
 /**
- * GET /api/v1/users/me
- * Get current authenticated user's profile
- * 
- * Returns:
- * - User profile
- * - Agent info (if registered as agent)
- * - Statistics (jobs posted/completed, earnings, etc.)
- * 
- * TODO: Implement user profile retrieval
+ * POST /api/v1/users/auth
+ * Authenticate with wallet (signature verification optional for MVP)
  */
-router.get('/me', authenticateWallet, async (req: Request, res: Response) => {
+router.post('/auth', async (req: Request, res: Response) => {
     try {
-        // Get user by wallet address
-        // const walletAddress = req.user.walletAddress;
-        // const user = await findUserByWallet(walletAddress);
+        const { walletAddress, signature,message } = req.body as AuthBody;
 
-        // if (!user) {
-        //     return res.status(404).json({ error: 'User not found' });
+        // Validate wallet address
+        if (!walletAddress) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'walletAddress is required',
+            });
+        }
+
+        // Validate SUI address format (basic check)
+        if (!walletAddress.startsWith('0x') || walletAddress.length !== 66) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'Invalid SUI wallet address format',
+            });
+        }
+
+        // TODO: Verify signature if provided
+        // if (signature && message) {
+        //     const isValid = await verifyWalletSignature(walletAddress, signature, message);
+        //     if (!isValid) {
+        //         return res.status(401).json({
+        //             status: 401,
+        //             error: true,
+        //             message: 'Invalid signature',
+        //         });
+        //     }
         // }
 
-        // Get additional info if agent
-        // let agentInfo = null;
-        // if (user.role === 'agent') {
-        //     agentInfo = await getAgentByUserId(user.id);
-        // }
+        // Get or create user
+        const user = await queries.getOrCreateUser(walletAddress);
 
-        // Get stats
-        // const stats = await getUserStats(user.id);
+        // TODO: Update last_login timestamp
+        // await queries.updateLastLogin(user.id);
 
-        // return res.json({
-        //     user,
-        //     agentInfo,
-        //     stats
-        // });
+        // TODO: Generate session token/JWT if needed
+        // const token = generateJWT(user);
 
-        res.status(501).json({ error: 'Not implemented' });
+        res.json({
+            status: 200,
+            error: false,
+            message: 'Authentication successful',
+            data: {
+                user: {
+                    id: user.id,
+                    walletAddress: user.wallet_address,
+                    role: user.role,
+                    displayName: user.display_name,
+                    createdAt: user.created_at,
+                },
+                // token, // Include if using JWT
+            },
+        });
     } catch (error) {
-        console.error('Error getting user profile:', error);
-        res.status(500).json({ error: 'Failed to get profile' });
+        console.error('Error authenticating:', error);
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Authentication failed',
+        });
     }
 });
 
 /**
- * POST /api/v1/users/auth
- * Authenticate with wallet signature
- * 
- * Body:
- * - walletAddress: string
- * - signature: string (signed message)
- * - message: string (original message that was signed)
- * 
- * Returns:
- * - user: User object (created if new)
- * - token: Session token or JWT (optional)
- * 
- * WORKFLOW:
- * 1. Verify the signature matches the wallet address
- * 2. Get or create user
- * 3. Update last_login timestamp
- * 4. Return user info (and session token if using sessions)
- * 
- * TODO: Implement wallet authentication
+ * GET /api/v1/users/me
+ * Get current authenticated user's profile
  */
-router.post('/auth', async (req: Request, res: Response) => {
+router.get('/me', authenticateWallet, async (req: Request, res: Response) => {
     try {
-        const { walletAddress, signature, message } = req.body as AuthBody;
+        const walletAddress = req.user!.walletAddress;
+        
+        const user = await queries.findUserByWallet(walletAddress);
 
-        // Validate required fields
-        // if (!walletAddress || !signature || !message) {
-        //     return res.status(400).json({ 
-        //         error: 'walletAddress, signature, and message are required' 
-        //     });
+        if (!user) {
+            return res.status(404).json({
+                status: 404,
+                error: true,
+                message: 'User not found',
+            });
+        }
+
+        // TODO: Get agent info if role is 'agent'
+        // let agentInfo = null;
+        // if (user.role === 'agent') {
+        //     agentInfo = await queries.getAgentByUserId(user.id);
         // }
 
-        // Validate wallet address format
-        // if (!isValidSuiAddress(walletAddress)) {
-        //     return res.status(400).json({ error: 'Invalid wallet address' });
-        // }
+        // TODO: Get user stats (jobs posted, completed, earnings)
+        // const stats = {
+        //     jobsPosted: await queries.countJobsByBuyer(user.id),
+        //     jobsCompleted: await queries.countCompletedJobsByAgent(user.id),
+        // };
 
-        // Verify signature
-        // const isValid = await verifyWalletSignature(walletAddress, signature, message);
-        // if (!isValid) {
-        //     return res.status(401).json({ error: 'Invalid signature' });
-        // }
-
-        // Get or create user
-        // let user = await findUserByWallet(walletAddress);
-        // if (!user) {
-        //     user = await createUser(walletAddress, 'buyer');
-        // }
-
-        // Update last login
-        // await updateLastLogin(user.id);
-
-        // Generate session token (optional)
-        // const token = generateSessionToken(user);
-
-        // return res.json({ user, token });
-
-        res.status(501).json({ error: 'Not implemented' });
+        res.json({
+            status: 200,
+            error: false,
+            message: 'Profile retrieved successfully',
+            data: {
+                user: {
+                    id: user.id,
+                    walletAddress: user.wallet_address,
+                    role: user.role,
+                    displayName: user.display_name,
+                    email: user.email,
+                    createdAt: user.created_at,
+                    lastLogin: user.last_login,
+                },
+                // agentInfo,
+                // stats,
+            },
+        });
     } catch (error) {
-        console.error('Error authenticating:', error);
-        res.status(500).json({ error: 'Authentication failed' });
+        console.error('Error getting profile:', error);
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to get profile',
+        });
     }
 });
 
 /**
  * PUT /api/v1/users/me
  * Update current user's profile
- * 
- * Body:
- * - displayName: string
- * - email: string
- * 
- * TODO: Implement profile update
  */
 router.put('/me', authenticateWallet, async (req: Request, res: Response) => {
     try {
-        const body = req.body as UpdateProfileBody;
+        const { displayName, email } = req.body as UpdateProfileBody;
 
-        // Validate email format if provided
-        // if (body.email && !isValidEmail(body.email)) {
-        //     return res.status(400).json({ error: 'Invalid email format' });
-        // }
+        // Validate email if provided
+        if (email && !isValidEmail(email)) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'Invalid email format',
+            });
+        }
 
-        // Get current user
-        // const walletAddress = req.user.walletAddress;
-        // const user = await findUserByWallet(walletAddress);
+        const userId = req.user!.userId;
 
-        // if (!user) {
-        //     return res.status(404).json({ error: 'User not found' });
-        // }
-
-        // Update user
-        // const updatedUser = await updateUser(user.id, {
-        //     display_name: body.displayName,
-        //     email: body.email
+        // TODO: Implement updateUser query
+        // const updatedUser = await queries.updateUser(userId, {
+        //     display_name: displayName,
+        //     email,
         // });
 
-        // return res.json({ user: updatedUser });
-
-        res.status(501).json({ error: 'Not implemented' });
+        // For now, return success
+        res.json({
+            status: 200,
+            error: false,
+            message: 'Profile updated successfully (TODO: implement updateUser query)',
+            data: {
+                updated: {
+                    displayName,
+                    email,
+                },
+            },
+        });
     } catch (error) {
         console.error('Error updating profile:', error);
-        res.status(500).json({ error: 'Failed to update profile' });
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to update profile',
+        });
     }
 });
 
 /**
  * GET /api/v1/users/:address
  * Get public user profile by wallet address
- * 
- * Returns:
- * - Public user info
- * - Agent info if applicable
- * 
- * TODO: Implement public profile retrieval
  */
 router.get('/:address', async (req: Request, res: Response) => {
     try {
         const { address } = req.params;
 
         // Validate address format
-        // if (!isValidSuiAddress(address)) {
-        //     return res.status(400).json({ error: 'Invalid wallet address' });
-        // }
+        if (!address.startsWith('0x') || address.length !== 66) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'Invalid SUI wallet address format',
+            });
+        }
 
-        // Get user
-        // const user = await findUserByWallet(address);
+        const user = await queries.findUserByWallet(address);
 
-        // if (!user) {
-        //     return res.status(404).json({ error: 'User not found' });
-        // }
+        if (!user) {
+            return res.status(404).json({
+                status: 404,
+                error: true,
+                message: 'User not found',
+            });
+        }
 
-        // Get public info only
-        // const publicProfile = {
-        //     walletAddress: user.wallet_address,
-        //     displayName: user.display_name,
-        //     role: user.role,
-        //     createdAt: user.created_at
-        // };
+        // Return only public info
+        const publicProfile = {
+            walletAddress: user.wallet_address,
+            displayName: user.display_name,
+            role: user.role,
+            createdAt: user.created_at,
+        };
 
-        // Add agent info if applicable
+        // TODO: Add agent info if role is 'agent'
         // if (user.role === 'agent') {
-        //     const agentInfo = await getAgentByUserId(user.id);
+        //     const agentInfo = await queries.getAgentByUserId(user.id);
         //     publicProfile.agentInfo = {
         //         skills: agentInfo.skills,
         //         rating: agentInfo.rating,
-        //         jobsCompleted: agentInfo.jobs_completed
+        //         jobsCompleted: agentInfo.jobs_completed,
         //     };
         // }
 
-        // return res.json({ profile: publicProfile });
-
-        res.status(501).json({ error: 'Not implemented' });
+        res.json({
+            status: 200,
+            error: false,
+            message: 'Public profile retrieved successfully',
+            data: {
+                profile: publicProfile,
+            },
+        });
     } catch (error) {
-        console.error('Error getting user profile:', error);
-        res.status(500).json({ error: 'Failed to get profile' });
+        console.error('Error getting public profile:', error);
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to get profile',
+        });
     }
 });
 
@@ -260,21 +337,22 @@ router.get('/:address', async (req: Request, res: Response) => {
 // =============================================================================
 
 /**
- * Verify wallet signature
- * 
- * @param walletAddress - The wallet address that signed
- * @param signature - The signature
- * @param message - The original message
- * @returns true if signature is valid
- * 
- * TODO: Implement with SUI SDK
+ * Validate email format
+ */
+function isValidEmail(email: string): boolean {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+}
+
+/**
+ * Verify wallet signature (TODO: implement with SUI SDK)
  */
 async function verifyWalletSignature(
     walletAddress: string,
     signature: string,
     message: string
 ): Promise<boolean> {
-    // Use SUI SDK to verify signature
+    // TODO: Use @mysten/sui to verify signature
     // import { verifyPersonalMessageSignature } from '@mysten/sui/verify';
     // 
     // const isValid = await verifyPersonalMessageSignature(
@@ -284,15 +362,8 @@ async function verifyWalletSignature(
     // );
     // return isValid;
 
-    return false;
-}
-
-/**
- * Validate email format
- */
-function isValidEmail(email: string): boolean {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(email);
+    console.warn('[TODO] Signature verification not implemented - accepting all requests');
+    return true; // Accept all for MVP
 }
 
 export default router;
