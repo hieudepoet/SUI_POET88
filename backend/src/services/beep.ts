@@ -8,13 +8,12 @@
  * - Checking invoice payment status
  * - Creating payouts to agent wallets
  * 
- * DOCUMENTATION: https://docs.beep.money (or official Beep SDK docs)
+ * DOCUMENTATION: https://github.com/beep-it/beep-sdk/blob/dev/README.md (or official Beep SDK docs)
  * 
  * =============================================================================
  */
 
-// TODO: Import the actual Beep SDK when available
-// import { BeepClient } from '@beep-it/sdk-core';
+import { BeepClient } from '@beep-it/sdk-core';
 
 // =============================================================================
 // TYPES
@@ -94,7 +93,7 @@ export interface BeepPayout {
 // =============================================================================
 
 // TODO: Replace with actual BeepClient type
-let beepClient: any = null;
+let beepClient: BeepClient | null = null;
 
 // =============================================================================
 // INITIALIZATION
@@ -111,21 +110,19 @@ let beepClient: any = null;
  * @throws Error if API key is missing or connection fails
  */
 export async function initializeBeepClient(): Promise<void> {
-    // const apiKey = process.env.BEEP_API_KEY;
+    const apiKey = process.env.BEEP_API_KEY;
 
-    // if (!apiKey) {
-    //     throw new Error('BEEP_API_KEY environment variable is required');
-    // }
+    if (!apiKey) {
+        throw new Error('BEEP_API_KEY environment variable is required');
+    }
 
-    // beepClient = new BeepClient({
-    //     apiKey,
-    //     environment: process.env.NODE_ENV === 'production' ? 'mainnet' : 'testnet'
-    // });
+    beepClient = new BeepClient({
+        apiKey,
+    });
 
-    // // Verify connection
-    // await beepClient.ping();
-
-    console.log('[Beep] Client initialization - TODO: Implement with actual SDK');
+    // Verify connection
+    const status = await beepClient.healthCheck();
+    console.log('[BEEP] Server status:', status);
 }
 
 /**
@@ -133,7 +130,7 @@ export async function initializeBeepClient(): Promise<void> {
  * 
  * @throws Error if client is not initialized
  */
-export function getBeepClient(): any {
+export function getBeepClient(): BeepClient {
     if (!beepClient) {
         throw new Error('Beep client not initialized. Call initializeBeepClient() first.');
     }
