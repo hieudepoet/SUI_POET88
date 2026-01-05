@@ -134,7 +134,6 @@ All foundational structure is in place:
 - `backend/src/db/queries.ts`
 
 **Tasks**:
-```typescript
 // database.ts
 - [x] Implement `initializeDatabase()` - Create pg pool
 - [x] Implement `query()` - Execute SQL
@@ -146,7 +145,6 @@ All foundational structure is in place:
 - [x] Implement agent CRUD functions
 - [x] Implement job CRUD functions
 - [x] Implement delivery queries
-```
 
 **Test**:
 ```typescript
