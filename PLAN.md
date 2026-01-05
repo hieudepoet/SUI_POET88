@@ -290,7 +290,6 @@ console.log('Invoice URL:', invoice.paymentUrl);
 **Files**: `agent-service/src/tools/signSuiTransaction.ts`
 
 **Tasks**:
-```typescript
 - [ ] Install @mysten/sui in agent-service
 - [ ] Load agent keypair from AGENT_PRIVATE_KEY env
 - [ ] Implement transaction building for:
@@ -299,7 +298,6 @@ console.log('Invoice URL:', invoice.paymentUrl);
   - 'release_escrow' - Pay sub-agent
 - [ ] Sign and execute transactions
 - [ ] Return transaction digest
-```
 
 **Estimated Time**: 3-4 hours
 
@@ -313,19 +311,16 @@ console.log('Invoice URL:', invoice.paymentUrl);
 - `agent-service/src/tools/hireAgent.ts`
 
 **Tasks**:
-```typescript
-// scoutAgents.ts
 - [ ] Implement HTTP GET to Backend /api/v1/agents
 - [ ] Parse query params (skills, budget, rating)
 - [ ] Return formatted agent list
 
-// hireAgent.ts
+
 - [ ] Implement HTTP POST to Backend /api/v1/jobs
 - [ ] If autoPayFromPool:
   - Get invoice ID from response
   - Call issuePayment tool to pay
 - [ ] Return job details with escrow info
-```
 
 **Estimated Time**: 3-4 hours
 
@@ -338,20 +333,16 @@ console.log('Invoice URL:', invoice.paymentUrl);
 - `agent-service/src/tools/submitDelivery.ts`
 - `agent-service/src/tools/verifyDelivery.ts`
 
-**Tasks**:
-```typescript
-// submitDelivery.ts
+**Tasks**
 - [ ] Implement HTTP POST to Backend /api/v1/jobs/:id/delivery
 - [ ] Handle large content (external URL for files)
 - [ ] Return delivery ID
 
-// verifyDelivery.ts
 - [ ] Implement HTTP GET to fetch delivery content
 - [ ] Optional: Add LLM quality analysis
 - [ ] If approved && autoRelease:
   - Call signSuiTransaction('release_escrow')
   - Notify backend of release
-```
 
 **Estimated Time**: 3-4 hours
 
@@ -367,13 +358,11 @@ console.log('Invoice URL:', invoice.paymentUrl);
 **Files**: `frontend/src/app/providers.tsx`, `frontend/src/components/wallet/WalletButton.tsx`
 
 **Tasks**:
-```typescript
 - [ ] Uncomment SuiClientProvider in providers.tsx
 - [ ] Configure wallet adapter
 - [ ] Implement WalletButton component
 - [ ] Show connected address
 - [ ] Handle disconnect
-```
 
 **Estimated Time**: 2-3 hours
 
@@ -385,28 +374,22 @@ console.log('Invoice URL:', invoice.paymentUrl);
 **Implementation Order**:
 
 **4.2.1: Agents Page** (`app/agents/page.tsx`)
-```typescript
 - [ ] Fetch agents from Backend API
 - [ ] Display in grid with AgentCard
 - [ ] Add skill filters
 - [ ] Add sorting (rating, price)
-```
 
 **4.2.2: Agent Detail** (`app/agents/[id]/page.tsx`)
-```typescript
 - [ ] Fetch agent details
 - [ ] Show skills, rating, portfolio
 - [ ] "Hire Agent" button
 - [ ] Job creation form
-```
 
 **4.2.3: Dashboard** (`app/dashboard/page.tsx`)
-```typescript
 - [ ] List user's jobs
 - [ ] Filter by status
 - [ ] Show deliveries
 - [ ] Approve/reject actions
-```
 
 **Estimated Time**: 6-8 hours total
 
@@ -418,13 +401,11 @@ console.log('Invoice URL:', invoice.paymentUrl);
 **Files**: `frontend/src/components/payment/PaymentModal.tsx`
 
 **Tasks**:
-```typescript
 - [ ] Display Beep QR code
 - [ ] Show payment URL
 - [ ] Poll payment status every 5s
 - [ ] Show success animation
 - [ ] Handle payment timeout
-```
 
 **Estimated Time**: 2-3 hours
 
