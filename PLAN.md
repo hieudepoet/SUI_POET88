@@ -165,7 +165,6 @@ console.log('Created user:', user);
 - `SUI_PACKAGE_ID` in `.env`
 
 **Tasks**:
-```typescript
 - [ ] Install @mysten/sui: `npm install @mysten/sui`
 - [ ] Implement `initializeSuiClient()` - Connect to testnet
 - [ ] Implement `createEscrow()`:
@@ -177,7 +176,7 @@ console.log('Created user:', user);
   - Return transaction digest
 - [ ] Implement `getEscrowState()` - Query on-chain data
 - [ ] Add error handling for insufficient gas
-```
+
 
 **Test**:
 ```typescript
@@ -200,7 +199,6 @@ console.log('Escrow created:', result.escrowObjectId);
 **Files**: `backend/src/services/beep.ts`
 
 **Tasks**:
-```typescript
 - [ ] Implement `initializeBeepClient()` - Initialize SDK
 - [ ] Implement `createInvoice()`:
   - Call beep.invoices.createInvoice()
@@ -208,7 +206,6 @@ console.log('Escrow created:', result.escrowObjectId);
 - [ ] Implement `getInvoiceStatus()` - Check payment status
 - [ ] Implement `createPayout()` - Pay agent wallet
 - [ ] Add webhook signature verification helpers
-```
 
 **Test**:
 ```typescript
@@ -235,7 +232,6 @@ console.log('Invoice URL:', invoice.paymentUrl);
 - SUI service (2.2)
 
 **Tasks**:
-```typescript
 - [ ] Implement `pollPayments()` - Main polling loop
 - [ ] Implement `processPayment()`:
   - Check invoice status via Beep
@@ -244,7 +240,6 @@ console.log('Invoice URL:', invoice.paymentUrl);
   - Trigger agent via MCP (optional for now)
 - [ ] Add proper error handling
 - [ ] Implement exponential backoff for retries
-```
 
 **Estimated Time**: 2-3 hours
 
@@ -258,35 +253,28 @@ console.log('Invoice URL:', invoice.paymentUrl);
 **Implementation Order**:
 
 **2.5.1: Users Routes** (`users.ts`)
-```typescript
 - [ ] POST /auth - Wallet authentication (verify signature)
 - [ ] GET /profile - Get user profile
 - [ ] PUT /profile - Update profile
-```
 
 **2.5.2: Agents Routes** (`agents.ts`)
-```typescript
 - [ ] GET /agents - List all agents (with filters)
 - [ ] GET /agents/:id - Get agent details
 - [ ] POST /agents - Register new agent
 - [ ] PUT /agents/:id - Update agent profile
-```
 
 **2.5.3: Jobs Routes** (`jobs.ts`)
-```typescript
 - [ ] POST /jobs - Create new job
 - [ ] GET /jobs - List jobs (filter by user/agent/status)
 - [ ] GET /jobs/:id - Get job details
 - [ ] POST /jobs/:id/hire - Create invoice for job
 - [ ] POST /jobs/:id/approve - Approve delivery & release escrow
 - [ ] POST /jobs/:id/delivery - Submit delivery
-```
 
 **2.5.4: Payments Routes** (`payments.ts`)
-```typescript
 - [ ] POST /webhooks/beep - Handle Beep payment webhooks
 - [ ] GET /invoices/:id - Get invoice status
-```
+
 
 **Estimated Time**: 5-6 hours total
 
