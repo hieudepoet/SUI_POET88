@@ -27,6 +27,7 @@ import userRoutes from './routes/users.js';
 import { initializeDatabase } from './db/database.js';
 import { initializeBeepClient } from './services/beep.js';
 import { startPaymentPolling } from './services/payment-poller.js';
+import { initializeSuiClient } from './services/sui.js';
 
 // Load environment variables
 dotenv.config();
@@ -141,7 +142,12 @@ async function startServer(): Promise<void> {
         startPaymentPolling();
         console.log('✅ Payment poller started');
 
-        // Step 4: Start the Express server
+        // Step 4: Initialize SUI client
+        console.log('💰 Initializing SUI client...');
+        await initializeSuiClient();
+        console.log('✅ SUI client initialized');
+
+        // Step 5: Start the Express server
         app.listen(PORT, () => {
             console.log('='.repeat(60));
             console.log(`🤖 BeepLancer Backend running on http://localhost:${PORT}`);
