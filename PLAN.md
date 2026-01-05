@@ -134,13 +134,11 @@ All foundational structure is in place:
 - `backend/src/db/queries.ts`
 
 **Tasks**:
-// database.ts
 - [x] Implement `initializeDatabase()` - Create pg pool
 - [x] Implement `query()` - Execute SQL
 - [x] Implement `transaction()` - Atomic operations
 - [x] Add connection health check
 
-// queries.ts  
 - [x] Implement user CRUD functions
 - [x] Implement agent CRUD functions
 - [x] Implement job CRUD functions
