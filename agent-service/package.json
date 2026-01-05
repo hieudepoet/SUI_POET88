@@ -1,25 +1,25 @@
 {
-    "name": "beeplancer-agent-service",
-    "version": "1.0.0",
-    "description": "BeepLancer AI Freelance Agent - MCP Server",
-    "main": "dist/index.js",
-    "scripts": {
-        "dev": "tsx watch src/index.ts",
-        "build": "tsc",
-        "start": "node dist/index.js",
-        "start:http": "npm run dev -- --mode http",
-        "start:stdio": "npm run dev -- --mode stdio"
-    },
-    "dependencies": {
-        "@modelcontextprotocol/sdk": "^1.0.0",
-        "dotenv": "^16.3.1",
-        "express": "^4.18.2",
-        "openai": "^4.20.0"
-    },
-    "devDependencies": {
-        "@types/express": "^4.17.21",
-        "@types/node": "^20.10.0",
-        "tsx": "^4.6.2",
-        "typescript": "^5.3.2"
-    }
+  "name": "beep-mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsx watch src/mcp-server.ts",
+    "start": "node dist/mcp-server.js"
+  },
+  "dependencies": {
+    "@beep-it/sdk-core": "^0.1.7",
+    "@modelcontextprotocol/sdk": "^1.17.4",
+    "dotenv": "^16.4.5",
+    "express": "^5.1.0",
+    "zod": "^3.22.4",
+    "zod-to-json-schema": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^20.10.0",
+    "tsx": "^4.6.2",
+    "typescript": "^5.6.2"
+  }
 }
