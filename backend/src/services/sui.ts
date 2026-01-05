@@ -22,9 +22,10 @@ import { Transaction } from '@mysten/sui/transactions';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { fromBase64 } from '@mysten/sui/utils';
 import dotenv from 'dotenv';
+import { platform } from 'os';
 
 dotenv.config();
-
+const usdc_coin_type = '0xa1ec7fc00a6f40db9693ad1415d0c193ad3906494428cf252621037bd7117e29::usdc::USDC';    
 // =============================================================================
 // TYPES
 // =============================================================================
@@ -112,13 +113,6 @@ function getEscrowPackageId(): string {
 
 /**
  * Initialize SUI client and platform keypair
- * 
- * IMPLEMENTATION:
- * 1. Create SUI client for the configured network
- * 2. Load platform keypair from private key
- * 3. Verify connection with a test RPC call
- * 
- * @throws Error if configuration is missing or connection fails
  */
 export async function initializeSuiClient(): Promise<void> {
     // Create client
@@ -127,17 +121,14 @@ export async function initializeSuiClient(): Promise<void> {
     suiClient = new SuiClient({ url: rpcUrl });
 
     // Load platform keypair for signing transactions
-    // const privateKeyBase64 = process.env.SUI_PRIVATE_KEY;
-    // if (privateKeyBase64) {
-    //     const privateKeyBytes = fromBase64(privateKeyBase64);
-    //     platformKeypair = Ed25519Keypair.fromSecretKey(privateKeyBytes);
-    // }
+    const privateKeyBech32 = process.env.SUI_PRIVATE_KEY;
+    if (privateKeyBech32) {
+        platformKeypair = Ed25519Keypair.fromSecretKey(privateKeyBech32);
+    }
 
     // Verify connection
-    // const chainId = await suiClient.getChainIdentifier();
-    // console.log(`[SUI] Connected to ${network} (chainId: ${chainId})`);
-
-    console.log('[SUI] Client initialization - TODO: Complete implementation');
+    const chainId = await suiClient.getChainIdentifier();
+    console.log(`[SUI] Connected to ${network} (chainId: ${chainId})`);
 }
 
 /**
@@ -156,127 +147,134 @@ export function getSuiClient(): SuiClient {
 
 /**
  * Create escrow by locking USDC in the smart contract
- * 
- * This is called after Beep confirms payment
- * 
- * @param params - Escrow creation parameters
- * @returns Result with escrow object ID and transaction digest
- * 
- * IMPLEMENTATION:
- * 1. Build transaction calling create_escrow function
- * 2. Add USDC coin as input
- * 3. Sign and execute transaction
- * 4. Extract created object ID from effects
- * 
- * TODO: Implement transaction building and execution
  */
 export async function createEscrow(
     params: EscrowCreationParams
 ): Promise<EscrowCreationResult> {
-    // const client = getSuiClient();
-    // const packageId = getEscrowPackageId();
+    const client = getSuiClient();
+    const packageId = getEscrowPackageId();
 
-    // Build transaction
-    // const tx = new Transaction();
+    const tx = new Transaction();
+    tx.moveCall({
+        target: `${packageId}::esrow::create_escrow`,
+        typeArguments: [usdc_coin_type],
+        arguments: [
+            tx.object(params.usdcCoinId),
+            tx.pure.address(params.agentAddress),
+            tx.pure.string(params.jobReference),           
+        ],
+    })
 
-    // Add the USDC coin object
-    // tx.moveCall({
-    //     target: `${packageId}::escrow::create_escrow`,
-    //     typeArguments: ['0xUSDA::usdc::USDC'], // Replace with actual USDC type
-    //     arguments: [
-    //         tx.object(params.usdcCoinId),  // USDC coin
-    //         tx.pure.address(params.agentAddress),  // Agent address
-    //         tx.pure.string(params.jobReference),   // Job reference
-    //     ],
-    // });
+    // Sign and execute transaction
+    if (!platformKeypair) {
+        throw new Error('Platform keypair not available');
+    }
 
-    // Sign and execute
-    // if (!platformKeypair) {
-    //     throw new Error('Platform keypair not available');
-    // }
-
-    // const result = await client.signAndExecuteTransaction({
-    //     transaction: tx,
-    //     signer: platformKeypair,
-    //     options: {
-    //         showEffects: true,
-    //         showObjectChanges: true,
-    //     }
-    // });
+    const signature = await client.signAndExecuteTransaction({
+        transaction: tx,
+        signer: platformKeypair,
+        options: {
+            showEffects: true,
+            showObjectChanges: true,
+        }
+    });
 
     // Extract escrow object ID from created objects
-    // const createdObjects = result.effects?.created || [];
-    // const escrowObject = createdObjects.find(obj => 
-    //     obj.owner && typeof obj.owner === 'object' && 'Shared' in obj.owner
-    // );
+    const createdObjects = signature.effects?.created || [];
+    const escrowObjects = createdObjects.find(obj => 
+        obj.reference.objectId === usdc_coin_type
+    );
 
-    // return {
-    //     txDigest: result.digest,
-    //     escrowObjectId: escrowObject?.reference?.objectId || '',
-    //     success: result.effects?.status?.status === 'success',
-    //     error: result.effects?.status?.error
-    // };
+    if (!escrowObjects) {
+        throw new Error('Escrow object not found');
+    }
 
-    throw new Error('createEscrow() not implemented');
+    return {
+        txDigest: signature.digest,
+        escrowObjectId: escrowObjects.reference.objectId,
+        success: signature.effects?.status?.status === 'success',
+        error: signature.effects?.status?.error
+    };
 }
 
 /**
  * Release escrow funds to the agent
- * 
- * This is called when the buyer approves the work
- * 
- * @param params - Release parameters
- * @returns Result with transaction digest
- * 
- * IMPLEMENTATION:
- * 1. Build transaction calling release_escrow function
- * 2. Must be signed by the buyer
- * 3. Execute and confirm
- * 
- * TODO: Implement transaction building and execution
  */
 export async function releaseEscrow(
     params: EscrowReleaseParams
 ): Promise<EscrowReleaseResult> {
-    // const client = getSuiClient();
-    // const packageId = getEscrowPackageId();
+    const client = getSuiClient();
+    const packageId = getEscrowPackageId();
 
     // Build transaction
-    // const tx = new Transaction();
+    const tx = new Transaction();
+    tx.moveCall({
+        target: `${packageId}::escrow::release_escrow`,
+        typeArguments: [usdc_coin_type],
+        arguments: [
+            tx.object(params.escrowObjectId),
+        ],
+    });
 
-    // tx.moveCall({
-    //     target: `${packageId}::escrow::release_escrow`,
-    //     typeArguments: ['0xUSDA::usdc::USDC'],
-    //     arguments: [
-    //         tx.object(params.escrowObjectId),
-    //     ],
-    // });
+    // Sign and execute transaction
+    if (!platformKeypair) {
+        throw new Error('Platform keypair not available');
+    }
 
-    // NOTE: This must be signed by the buyer, not the platform
-    // In a real implementation, you would:
-    // 1. Build the transaction
-    // 2. Return the transaction bytes to the frontend
-    // 3. Frontend signs with buyer's wallet
-    // 4. Submit the signed transaction
+    const signature = await client.signAndExecuteTransaction({
+        transaction: tx,
+        signer: platformKeypair,
+        options: {
+            showEffects: true,
+            showObjectChanges: true,
+        }
+    });
 
-    throw new Error('releaseEscrow() not implemented');
+    return {
+        txDigest: signature.digest,
+        success: signature.effects?.status?.status === 'success',
+        error: signature.effects?.status?.error
+    };
 }
 
 /**
  * Cancel escrow and return funds to buyer
- * 
- * @param escrowObjectId - Escrow object ID to cancel
- * @returns Result with transaction digest
- * 
- * TODO: Implement similar to releaseEscrow
  */
 export async function cancelEscrow(
     escrowObjectId: string
 ): Promise<EscrowReleaseResult> {
-    // Similar implementation to releaseEscrow
-    // but calls cancel_escrow function
+    const client = getSuiClient();
+    const packageId = getEscrowPackageId();
 
-    throw new Error('cancelEscrow() not implemented');
+    // Build transaction
+    const tx = new Transaction();
+    tx.moveCall({
+        target: `${packageId}::escrow::cancel_escrow`,
+        typeArguments: [usdc_coin_type],
+        arguments: [
+            tx.object(escrowObjectId),
+        ],
+    });
+
+    // Sign and execute transaction
+    if (!platformKeypair) {
+        throw new Error('Platform keypair not available');
+    }
+
+    const signature = await client.signAndExecuteTransaction({
+        transaction: tx,
+        signer: platformKeypair,
+        options: {
+            showEffects: true,
+            showObjectChanges: true,
+        }
+    });
+
+    return {
+        txDigest: signature.digest,
+        success: signature.effects?.status?.status === 'success',
+        error: signature.effects?.status?.error
+    };
 }
 
 // =============================================================================
@@ -285,65 +283,121 @@ export async function cancelEscrow(
 
 /**
  * Get escrow state by object ID
- * 
- * @param escrowObjectId - Escrow object ID
- * @returns Escrow state or null if not found
- * 
- * TODO: Implement object reading and parsing
  */
 export async function getEscrowState(
     escrowObjectId: string
 ): Promise<EscrowState | null> {
-    // const client = getSuiClient();
+    const client = getSuiClient();
 
-    // const object = await client.getObject({
-    //     id: escrowObjectId,
-    //     options: {
-    //         showContent: true,
-    //         showType: true,
-    //     }
-    // });
+    const object = await client.getObject({
+        id: escrowObjectId,
+        options: {
+            showContent: true,
+            showType: true,
+        }
+    });
 
-    // if (!object.data || object.error) {
-    //     return null;
-    // }
+    if (!object.data || object.error) {
+        return null;
+    }
 
     // Parse the Move struct fields
-    // const content = object.data.content;
-    // if (content?.dataType !== 'moveObject') {
-    //     return null;
-    // }
+    const content = object.data.content;
+    if (content?.dataType !== 'moveObject') {
+        return null;
+    }
 
-    // const fields = content.fields as any;
-    // return {
-    //     objectId: escrowObjectId,
-    //     buyer: fields.buyer,
-    //     agent: fields.agent,
-    //     amount: parseInt(fields.amount),
-    //     status: parseStatus(fields.status),
-    //     jobReference: fields.job_reference,
-    //     createdAt: parseInt(fields.created_at)
-    // };
-
-    throw new Error('getEscrowState() not implemented');
+    const fields = content.fields as any;
+    
+    return {
+        objectId: escrowObjectId,
+        buyer: fields.buyer,
+        agent: fields.agent,
+        amount: parseInt(fields.balance?.value || '0'),
+        status: parseStatus(fields.status),
+        jobReference: Buffer.from(fields.job_reference).toString('utf8'),
+        createdAt: parseInt(fields.created_at)
+    };
 }
 
 /**
- * Get all escrows for a buyer
- * 
- * @param buyerAddress - Buyer's wallet address
- * @returns Array of escrow states
- * 
- * TODO: Implement using indexer or events
+ * Get all escrows for a buyer using SUI GraphQL
  */
 export async function getEscrowsByBuyer(
     buyerAddress: string
 ): Promise<EscrowState[]> {
-    // This requires indexer support or event querying
-    // Option 1: Use SUI indexer to query objects by type and field
-    // Option 2: Query events and filter by buyer
+    const packageId = getEscrowPackageId();
+    const network = getSuiNetwork();
+    
+    // SUI GraphQL endpoint
+    const graphqlEndpoint = `https://sui-${network}.mystenlabs.com/graphql`;
+    
+    // GraphQL query to get all LockedPayment objects
+    const query = `
+        query GetEscrows($type: String!) {
+            objects(filter: { type: $type }) {
+                nodes {
+                    address
+                    version
+                    contents {
+                        json
+                    }
+                }
+            }
+        }
+    `;
 
-    throw new Error('getEscrowsByBuyer() not implemented');
+    const variables = {
+        type: `${packageId}::escrow::LockedPayment<${usdc_coin_type}>`
+    };
+
+    try {
+        const response = await fetch(graphqlEndpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ query, variables })
+        });
+
+        if (!response.ok) {
+            throw new Error(`GraphQL failed: ${response.statusText}`);
+        }
+
+        const result: any = await response.json();
+        
+        if (result.errors) {
+            console.error('GraphQL errors:', result.errors);
+            return [];
+        }
+
+        const objects = result.data?.objects?.nodes || [];
+        const escrows: EscrowState[] = [];
+
+        for (const obj of objects) {
+            if (!obj.contents?.json) continue;
+
+            const fields = obj.contents.json;
+
+            // Filter by buyer field
+            if (fields.buyer !== buyerAddress) continue;
+
+            escrows.push({
+                objectId: obj.address,
+                buyer: fields.buyer,
+                agent: fields.agent,
+                amount: parseInt(fields.balance?.value || '0'),
+                status: parseStatus(parseInt(fields.status)),
+                jobReference: Buffer.from(fields.job_reference || []).toString('utf8'),
+                createdAt: parseInt(fields.created_at || '0')
+            });
+        }
+
+        return escrows;
+    } catch (error) {
+        console.error('Error querying escrows via GraphQL:', error);
+        return [];
+    }
 }
 
 // =============================================================================
@@ -365,7 +419,7 @@ function parseStatus(statusCode: number): EscrowState['status'] {
 /**
  * Build a transaction for client-side signing
  * 
- * Use this when the buyer needs to sign the transaction
+ * Use this when the buyer needs to sign the transaction from their wallet
  * (e.g., for release or cancel operations)
  * 
  * @param escrowObjectId - Escrow object ID
@@ -376,24 +430,37 @@ export async function buildClientTransaction(
     escrowObjectId: string,
     operation: 'release' | 'cancel'
 ): Promise<string> {
-    // const packageId = getEscrowPackageId();
-    // const tx = new Transaction();
+    const client = getSuiClient();
+    const packageId = getEscrowPackageId();
+    
+    const tx = new Transaction();
 
-    // const target = operation === 'release' 
-    //     ? `${packageId}::escrow::release_escrow`
-    //     : `${packageId}::escrow::cancel_escrow`;
+    // Select the appropriate function
+    const target = operation === 'release' 
+        ? `${packageId}::escrow::release_escrow`
+        : `${packageId}::escrow::cancel_escrow`;
 
-    // tx.moveCall({
-    //     target,
-    //     typeArguments: ['0xUSDA::usdc::USDC'],
-    //     arguments: [tx.object(escrowObjectId)],
-    // });
+    // Build the move call
+    tx.moveCall({
+        target,
+        typeArguments: [usdc_coin_type],
+        arguments: [
+            tx.object(escrowObjectId)
+        ],
+    });
 
-    // Serialize for client-side signing
-    // const bytes = await tx.build({ client: getSuiClient() });
-    // return toBase64(bytes);
+    // Set gas budget (optional, wallet will set if not provided)
+    tx.setGasBudget(10000000); // 0.01 SUI
 
-    throw new Error('buildClientTransaction() not implemented');
+    // Serialize transaction for client-side signing
+    const bytes = await tx.build({ 
+        client,
+        // Don't sign here - client will sign
+        onlyTransactionKind: false
+    });
+    
+    // Return as base64 string for easy transport
+    return Buffer.from(bytes).toString('base64');
 }
 
 /**

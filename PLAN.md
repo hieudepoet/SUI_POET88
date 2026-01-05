@@ -167,15 +167,15 @@ console.log('Created user:', user);
 **Tasks**:
 - [x] Install @mysten/sui: `npm install @mysten/sui`
 - [x] Implement `initializeSuiClient()` - Connect to testnet
-- [ ] Implement `createEscrow()`:
+- [x] Implement `createEscrow()`:
   - Build transaction with moveCall
   - Sign with platform keypair
   - Execute and return object ID
-- [ ] Implement `releaseEscrow()`:
+- [x] Implement `releaseEscrow()`:
   - Call release_escrow function
   - Return transaction digest
-- [ ] Implement `getEscrowState()` - Query on-chain data
-- [ ] Add error handling for insufficient gas
+- [x] Implement `getEscrowState()` - Query on-chain data
+- [x] Add error handling for insufficient gas
 
 
 **Test**:
