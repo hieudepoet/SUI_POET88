@@ -165,8 +165,8 @@ console.log('Created user:', user);
 - `SUI_PACKAGE_ID` in `.env`
 
 **Tasks**:
-- [ ] Install @mysten/sui: `npm install @mysten/sui`
-- [ ] Implement `initializeSuiClient()` - Connect to testnet
+- [x] Install @mysten/sui: `npm install @mysten/sui`
+- [x] Implement `initializeSuiClient()` - Connect to testnet
 - [ ] Implement `createEscrow()`:
   - Build transaction with moveCall
   - Sign with platform keypair
