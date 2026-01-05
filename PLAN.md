@@ -38,14 +38,14 @@ All foundational structure is in place:
 #### Database & Schema ✅
 - [x] `backend/scripts/init.sql` - Complete schema with tables, indexes, views
 - [x] Users, Agents, Jobs, Deliveries tables defined
-- [ ] **ACTION**: Run `init.sql` on local PostgreSQL
+- [x] **ACTION**: Run `init.sql` on local PostgreSQL
 
 #### Smart Contract ✅
 - [x] Move contract with `LockedPayment` struct
 - [x] Functions: `create_escrow`, `release_escrow`, `cancel_escrow`
 - [x] Unit tests (skeleton)
 - [x] Admin emergency recovery
-- [ ] **ACTION**: Build & publish to Testnet
+- [x] **ACTION**: Build & publish to Testnet
 
 #### Backend Structure ✅
 - [x] Express server setup (`src/index.ts`)
@@ -85,14 +85,14 @@ All foundational structure is in place:
 **Files**: `backend/scripts/init.sql`
 
 **Tasks**:
-- [ ] Create PostgreSQL database `beeplancer`
-- [ ] Run `psql -d beeplancer -f backend/scripts/init.sql`
-- [ ] Verify tables created:
+- [x] Create PostgreSQL database `beeplancer`
+- [x] Run `psql -d beeplancer -f backend/scripts/init.sql`
+- [x] Verify tables created:
   ```sql
   \dt  -- List tables
   SELECT * FROM platform_config;
   ```
-- [ ] Test views: `v_active_jobs`, `v_agent_stats`
+- [x] Test views: `v_active_jobs`, `v_agent_stats`
 
 **Estimated Time**: 30 minutes
 
@@ -104,17 +104,17 @@ All foundational structure is in place:
 **Files**: `move/beeplancer/`
 
 **Tasks**:
-- [ ] Build contract: `sui move build`
-- [ ] Test: `sui move test` (ensure all tests pass)
-- [ ] Publish to Testnet:
+- [x] Build contract: `sui move build`
+- [x] Test: `sui move test` (ensure all tests pass)
+- [x] Publish to Testnet:
   ```bash
   sui client publish --gas-budget 100000000
   ```
-- [ ] Save **Package ID** to `backend/.env`:
+- [x] Save **Package ID** to `backend/.env`:
   ```env
   SUI_PACKAGE_ID=0x...
   ```
-- [ ] Test escrow creation manually via CLI (optional)
+- [x] Test escrow creation manually via CLI (optional)
 
 **Estimated Time**: 1-2 hours
 
@@ -136,16 +136,16 @@ All foundational structure is in place:
 **Tasks**:
 ```typescript
 // database.ts
-- [ ] Implement `initializeDatabase()` - Create pg pool
-- [ ] Implement `query()` - Execute SQL
-- [ ] Implement `transaction()` - Atomic operations
-- [ ] Add connection health check
+- [x] Implement `initializeDatabase()` - Create pg pool
+- [x] Implement `query()` - Execute SQL
+- [x] Implement `transaction()` - Atomic operations
+- [x] Add connection health check
 
 // queries.ts  
-- [ ] Implement user CRUD functions
-- [ ] Implement agent CRUD functions
-- [ ] Implement job CRUD functions
-- [ ] Implement delivery queries
+- [x] Implement user CRUD functions
+- [x] Implement agent CRUD functions
+- [x] Implement job CRUD functions
+- [x] Implement delivery queries
 ```
 
 **Test**:
