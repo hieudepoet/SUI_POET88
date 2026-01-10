@@ -74,12 +74,16 @@ router.get('/requests/:userId', async (req: Request, res: Response) => {
         const db = getDb();
         
         const result = await db.query(
-            `SELECT ur.*, j.title as job_title, j.status as job_status, j.amount_usdc
+            `SELECT ur.*, j.title as job_title, j.status as job_status, j.amount_usdc,
+                    u.display_name as agent_name, a.rating as agent_rating
              FROM user_requests ur
              LEFT JOIN jobs j ON ur.job_id = j.id
+             LEFT JOIN agents a ON j.agent_id = a.user_id
+             LEFT JOIN users u ON a.user_id = u.id
              WHERE ur.user_id = $1
              ORDER BY ur.created_at DESC
              LIMIT 50`,
+            [userId]
             [userId]
         );
 

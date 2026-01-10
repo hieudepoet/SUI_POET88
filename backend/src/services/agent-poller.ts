@@ -1,6 +1,6 @@
-
 import { getDb } from '../db/database.js';
 import { createJob, findAgentsBySkill, getJobById } from '../db/queries.js';
+import { LlmAnalyzer } from './llm-analyzer.js';
 
 let pollerInterval: NodeJS.Timeout | null = null;
 let isPolling = false;
@@ -53,60 +53,52 @@ async function processRequest(req: any) {
     const db = getDb();
 
     try {
-        // --- SIMPLE AI LOGIC (MVP) ---
-        // Parse intent from description
-        const text = req.description.toLowerCase();
-        let skill = 'general';
-        let amount = 50; // Default budget
-        let title = 'General Task';
+        // --- ADVANCED AI LOGIC ---
+        // Use LLM Analyzer to understand intent, budget, and required skills
+        const analyzer = new LlmAnalyzer();
+        const analysis = await analyzer.analyze(req.description);
 
-        // Extract budget (e.g. "for $500" or "500 usdc")
-        const moneyMatch = text.match(/(\$|usdc\s?)\s?(\d+)/);
-        if (moneyMatch) {
-            amount = parseInt(moneyMatch[2]);
-        }
+        console.log(`[AgentPoller] Analysis for #${req.id}:`, analysis);
 
-        // Infer Skill & Title
-        if (text.includes('web') || text.includes('site') || text.includes('react') || text.includes('app')) {
-            skill = 'development';
-            title = 'Web Development Task';
-        } else if (text.includes('design') || text.includes('logo') || text.includes('ui')) {
-            skill = 'design';
-            title = 'Design Task';
-        } else if (text.includes('translate') || text.includes('english')) {
-            skill = 'translation';
-            title = 'Translation Task';
-        } else if (text.includes('writ') || text.includes('blog')) {
-            skill = 'writing';
-            title = 'Content Writing Task';
-        } else if (text.includes('audit') || text.includes('security')) {
-            skill = 'audit';
-            title = 'Smart Contract Audit';
-        }
+        const title = analysis.summary;
+        const amount = analysis.estimatedBudget;
+        // Use the first identified skill, or 'general' if none
+        const skill = analysis.skills.length > 0 ? analysis.skills[0] : 'general';
 
         // Find Agent
-        // For MVP, just pick the first available agent with the skill, or ANY agent if none
+        // Try to find agent matching the primary skill
         let agents = await findAgentsBySkill(skill);
+        
+        // If no agent found for primary skill, try secondary skills if available
+        if (agents.length === 0 && analysis.skills.length > 1) {
+            for (let i = 1; i < analysis.skills.length; i++) {
+                console.log(`[AgentPoller] No agent for ${skill}, trying ${analysis.skills[i]}`);
+                agents = await findAgentsBySkill(analysis.skills[i]);
+                if (agents.length > 0) break;
+            }
+        }
+
+        // Fallback to any available agent if still none found
         if (agents.length === 0) {
-            console.log('[AgentPoller] No agent with skill ' + skill + ', falling back to all agents');
-            // Mock fallback: query raw SQL or just retry with 'general' if implemented
-            const allAgentsRes = await db.query('SELECT * FROM agents WHERE is_available = true LIMIT 1');
+            console.log('[AgentPoller] No agent with matching skills, falling back to any available agent');
+            const allAgentsRes = await db.query('SELECT * FROM agents WHERE is_available = true ORDER BY rating DESC LIMIT 1');
             agents = allAgentsRes.rows as any;
         }
 
         let selectedAgentId = null;
         if (agents.length > 0) {
-            selectedAgentId = agents[0].user_id; // Using user_id as agent_id reference in jobs
+            // Pick the higest rated one (already sorted by query)
+            selectedAgentId = agents[0].user_id; 
         }
 
         // Create Job
-        console.log(`[AgentPoller] Creating job: ${title} ($${amount}) for Agent ${selectedAgentId}`);
+        console.log(`[AgentPoller] Creating job: ${title} ($${amount}) for Agent ${selectedAgentId || 'NONE'}`);
         
         const job = await createJob(
             title,
             req.user_id,
             amount,
-            req.description,
+            req.description, // Requirements
             selectedAgentId || undefined
         );
 
