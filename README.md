@@ -86,34 +86,35 @@ BeepLancer/
 │   └── tests/
 │       └── beeplancer_tests.move
 │
-├── backend/                   # Orchestrator & API Server
+├── backend/                   # Unified Backend (Orchestrator + MCP Server)
 │   ├── src/
 │   │   ├── db/                # PostgreSQL connection & queries
 │   │   ├── services/
 │   │   │   ├── beep.ts        # Beep Pay SDK integration
 │   │   │   ├── sui.ts         # SUI blockchain service
 │   │   │   ├── mcp-client.ts  # MCP agent communication
-│   │   │   └── payment-poller.ts  # Background invoice checker
+│   │   │   ├── payment-poller.ts  # Background invoice checker
+│   │   │   └── personal-agent.ts  # Personal Agent worker
 │   │   ├── routes/            # Express API routes
-│   │   └── index.ts           # Server entry point
-│   ├── scripts/
-│   │   └── init.sql           # Database schema
-│   └── .env.example
-│
-├── agent-service/             # Autonomous AI Agent (MCP Server)
-│   ├── src/
-│   │   ├── tools/
-│   │   │   ├── scoutAgents.ts     # 🆕 Find suitable agents
-│   │   │   ├── hireAgent.ts       # 🆕 Hire & auto-pay
-│   │   │   ├── signSuiTransaction.ts  # 🆕 Sign SUI txs
+│   │   │   ├── users.ts       # User management
+│   │   │   ├── agents.ts      # Agent registry
+│   │   │   ├── jobs.ts        # Job lifecycle
+│   │   │   ├── payments.ts    # Beep Pay webhooks
+│   │   │   └── pools.ts       # Fund pool management
+│   │   ├── tools/             # MCP Tools (integrated)
+│   │   │   ├── scoutAgents.ts     # Find suitable agents
+│   │   │   ├── hireAgent.ts       # Hire & auto-pay
+│   │   │   ├── signSuiTransaction.ts  # Sign SUI txs
 │   │   │   ├── submitDelivery.ts  # Submit work results
-│   │   │   ├── verifyDelivery.ts  # 🆕 Verify & release escrow
 │   │   │   ├── checkBeepApi.ts    # Beep health check
 │   │   │   ├── issuePayment.ts    # Create payments
 │   │   │   └── *Streaming.ts      # Payment streaming
-│   │   ├── mcp-server.ts      # MCP server core
-│   │   └── types/index.ts     # Type definitions
-│   └── README.md              # Agent-specific docs
+│   │   ├── types/             # Shared type definitions
+│   │   ├── mcp-server.ts      # MCP server HTTP handler
+│   │   └── index.ts           # Main server entry point
+│   ├── scripts/
+│   │   └── init.sql           # Database schema
+│   └── API_ROUTES.md          # API documentation
 │
 └── frontend/                  # Next.js User Dashboard
     ├── src/
@@ -201,20 +202,10 @@ cp .env.example .env
 # Edit .env with your credentials
 
 npm run dev  # Starts on port 3000
+# This runs both the API server and MCP server
 ```
 
-### 4. Agent Service Setup
-
-```bash
-cd agent-service
-npm install
-cp .env.example .env
-# Edit .env (BEEP_API_KEY, AGENT_PRIVATE_KEY, etc.)
-
-npm run dev  # Starts on port 3001
-```
-
-### 5. Frontend Setup
+### 4. Frontend Setup
 
 ```bash
 cd frontend
@@ -253,43 +244,30 @@ MCP_AGENT_URL=http://localhost:3001
 PORT=3000
 ```
 
-### Agent Service `.env`
-
-```env
-BEEP_API_KEY=your_beep_api_key
-BEEP_URL=https://api.beeppay.io
-
-AGENT_WALLET_ADDRESS=0x_your_sui_wallet
-AGENT_PRIVATE_KEY=your_base64_private_key
-
-BACKEND_API_URL=http://localhost:3000
-
-PORT=3001
-COMMUNICATION_MODE=http
-```
-
 ---
 
 ## � Current Status
 
-### ✅ Completed (Skeleton/Framework)
-- [x] Smart Contract (escrow.move) with tests
-- [x] Database schema (init.sql)
-- [x] Backend structure (services, routes)
-- [x] Agent Service with 11 tools (5 new, 6 from Beep template)
-- [x] Frontend structure (Tailwind v4, layout)
+### ✅ Completed
+- [x] **Smart Contract**: SUI Move escrow contract with tests
+- [x] **Database**: PostgreSQL schema with all tables initialized
+- [x] **Backend Architecture**: Unified backend with API + MCP server
+- [x] **Services**: Beep Pay, SUI, Payment Poller, Personal Agent
+- [x] **API Routes**: 28 endpoints (users, agents, jobs, payments, pools)
+- [x] **MCP Tools**: 8 tools for agent operations
+- [x] **Type Definitions**: Proper TypeScript types with MCP SDK
 
-### 🚧 In Progress (Implementation Needed)
-- [ ] Backend: Database connection & queries
-- [ ] Backend: Beep SDK integration
-- [ ] Backend: SUI blockchain service
-- [ ] Agent: SUI transaction signing
-- [ ] Agent: Scout & hire implementation
-- [ ] Frontend: Wallet connection
-- [ ] Frontend: API integration
+### 🚧 In Progress
+- [ ] **Agent Wallet Generation**: Deterministic wallet per user
+- [ ] **Frontend Development**: Next.js dashboard with wallet connection
+- [ ] **End-to-End Testing**: Full job lifecycle testing
+- [ ] **Personal Agent Logic**: Autonomous job scouting and hiring
 
 ### 📝 Next Steps
-See [PLAN.md](./PLAN.md) for detailed implementation roadmap.
+1. Implement deterministic agent wallet generation
+2. Complete frontend wallet integration
+3. Test full job creation and escrow flow
+4. Deploy to testnet
 
 ---
 
@@ -298,7 +276,7 @@ See [PLAN.md](./PLAN.md) for detailed implementation roadmap.
 - [SUI Move Book](https://move-book.com)
 - [Model Context Protocol](https://modelcontextprotocol.io)
 - [Beep Pay Documentation](https://docs.beeppay.io)
-- [Agent Service README](./agent-service/README.md)
+- [API Routes Documentation](./backend/API_ROUTES.md)
 
 ---
 

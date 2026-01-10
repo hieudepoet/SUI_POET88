@@ -1,6 +1,6 @@
 [package]
 name = "beeplancer"
-edition = "2024.beta"
+edition = "2024"
 
 [dependencies]
 # Dependencies are automatically managed by the 2024.beta edition

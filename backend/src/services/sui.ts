@@ -156,7 +156,7 @@ export async function createEscrow(
 
     const tx = new Transaction();
     tx.moveCall({
-        target: `${packageId}::esrow::create_escrow`,
+        target: `${packageId}::escrow::create_escrow`,
         typeArguments: [usdc_coin_type],
         arguments: [
             tx.object(params.usdcCoinId),
@@ -418,13 +418,6 @@ function parseStatus(statusCode: number): EscrowState['status'] {
 
 /**
  * Build a transaction for client-side signing
- * 
- * Use this when the buyer needs to sign the transaction from their wallet
- * (e.g., for release or cancel operations)
- * 
- * @param escrowObjectId - Escrow object ID
- * @param operation - 'release' or 'cancel'
- * @returns Serialized transaction bytes (base64)
  */
 export async function buildClientTransaction(
     escrowObjectId: string,

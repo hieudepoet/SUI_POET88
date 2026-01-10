@@ -14,6 +14,7 @@
 
 import { Router, Request, Response, NextFunction } from 'express';
 import * as queries from '../db/queries.js';
+import { verifyPersonalMessageSignature } from '@mysten/sui/verify';
 
 const router = Router();
 
@@ -110,7 +111,8 @@ router.post('/auth', async (req: Request, res: Response) => {
         }
 
         // Validate SUI address format (basic check)
-        if (!walletAddress.startsWith('0x') || walletAddress.length !== 66) {
+        // SUI addresses are 0x + 64 hex chars, but can be shorter when normalized
+        if (!walletAddress.startsWith('0x') || walletAddress.length < 42 || walletAddress.length > 66) {
             return res.status(400).json({
                 status: 400,
                 error: true,
@@ -118,17 +120,17 @@ router.post('/auth', async (req: Request, res: Response) => {
             });
         }
 
-        // TODO: Verify signature if provided
-        // if (signature && message) {
-        //     const isValid = await verifyWalletSignature(walletAddress, signature, message);
-        //     if (!isValid) {
-        //         return res.status(401).json({
-        //             status: 401,
-        //             error: true,
-        //             message: 'Invalid signature',
-        //         });
-        //     }
-        // }
+        // Verify signature if provided
+        if (signature && message) {
+            const isValid = await verifyWalletSignature(walletAddress, signature, message);
+            if (!isValid) {
+                return res.status(401).json({
+                    status: 401,
+                    error: true,
+                    message: 'Invalid signature',
+                });
+            }
+        }
 
         // Get or create user
         const user = await queries.getOrCreateUser(walletAddress);
@@ -163,6 +165,36 @@ router.post('/auth', async (req: Request, res: Response) => {
         });
     }
 });
+
+/**
+ * GET /api/v1/users/agent-wallet
+ * Get deterministic agent wallet address for authenticated user
+ * This wallet is auto-generated from the user's ID using HMAC-SHA256
+ */
+// router.get('/agent-wallet', authenticateWallet, async (req: Request, res: Response) => {
+//     try {
+//         const userId = req.user!.userId;
+//         const agentAddress = getAgentAddress(userId);
+        
+//         res.json({
+//             status: 200,
+//             error: false,
+//             message: 'Agent wallet retrieved successfully',
+//             data: {
+//                 userId,
+//                 agentWalletAddress: agentAddress,
+//                 note: 'This wallet is deterministically generated from your user ID. The private key is managed by the backend for autonomous agent operations.'
+//             },
+//         });
+//     } catch (error) {
+//         console.error('Error getting agent wallet:', error);
+//         res.status(500).json({
+//             status: 500,
+//             error: true,
+//             message: 'Failed to get agent wallet',
+//         });
+//     }
+// });
 
 /**
  * GET /api/v1/users/me
@@ -278,7 +310,7 @@ router.get('/:address', async (req: Request, res: Response) => {
         const { address } = req.params;
 
         // Validate address format
-        if (!address.startsWith('0x') || address.length !== 66) {
+        if (!address.startsWith('0x') || address.length < 42 || address.length > 66) {
             return res.status(400).json({
                 status: 400,
                 error: true,
@@ -352,18 +384,18 @@ async function verifyWalletSignature(
     signature: string,
     message: string
 ): Promise<boolean> {
-    // TODO: Use @mysten/sui to verify signature
-    // import { verifyPersonalMessageSignature } from '@mysten/sui/verify';
-    // 
-    // const isValid = await verifyPersonalMessageSignature(
-    //     new TextEncoder().encode(message),
-    //     signature,
-    //     walletAddress
-    // );
-    // return isValid;
-
-    console.warn('[TODO] Signature verification not implemented - accepting all requests');
-    return true; // Accept all for MVP
+    // Use @mysten/sui to verify signature
+    try {
+        await verifyPersonalMessageSignature(
+            new TextEncoder().encode(message),
+            signature,
+            { address: walletAddress }
+        );
+        return true;
+    } catch (error) {
+        console.error('Signature verification failed:', error);
+        return false;
+    }
 }
 
 export default router;

@@ -80,8 +80,12 @@ export interface AgentTool {
 // CLIENT INSTANCE
 // =============================================================================
 
-// TODO: Replace with actual MCP Client type
-let mcpClient: any = null;
+interface McpConfig {
+    agentUrl: string;
+    timeout: number;
+}
+
+let mcpConfig: McpConfig | null = null;
 let isConnected = false;
 
 // =============================================================================
@@ -91,41 +95,39 @@ let isConnected = false;
 /**
  * Initialize MCP client and connect to the agent server
  * 
- * IMPLEMENTATION:
- * 1. Get agent MCP URL from environment
- * 2. Create HTTP transport (or stdio if running locally)
- * 3. Create MCP client with transport
- * 4. Connect and verify with capabilities exchange
- * 
- * @throws Error if connection fails
- * 
- * TODO: Implement with actual MCP SDK
+ * Uses HTTP transport to communicate with agent-service
  */
 export async function initializeMcpClient(): Promise<void> {
-    // const mcpUrl = process.env.AGENT_MCP_URL;
+    const agentUrl = process.env.MCP_AGENT_URL || process.env.AGENT_MCP_URL;
 
-    // if (!mcpUrl) {
-    //     throw new Error('AGENT_MCP_URL environment variable is required');
-    // }
+    if (!agentUrl) {
+        throw new Error('MCP_AGENT_URL environment variable is required');
+    }
 
-    // Create HTTP transport
-    // const transport = new HttpClientTransport({
-    //     url: mcpUrl
-    // });
+    mcpConfig = {
+        agentUrl,
+        timeout: 300000 // 5 minutes default timeout
+    };
 
-    // Create client
-    // mcpClient = new Client({
-    //     name: 'beeplancer-orchestrator',
-    //     version: '1.0.0'
-    // }, {
-    //     capabilities: {}
-    // });
+    // Test connection
+    try {
+        const response = await fetch(`${agentUrl}/health`, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
 
-    // Connect
-    // await mcpClient.connect(transport);
-    // isConnected = true;
+        if (!response.ok) {
+            throw new Error(`Agent health check failed: ${response.statusText}`);
+        }
 
-    console.log('[MCP] Client initialization - TODO: Implement with actual MCP SDK');
+        isConnected = true;
+        console.log(`[MCP] Connected to agent at ${agentUrl}`);
+    } catch (error) {
+        console.error('[MCP] Failed to connect to agent:', error);
+        throw new Error(`MCP initialization failed: ${error}`);
+    }
 }
 
 /**
@@ -139,11 +141,11 @@ export function isMcpConnected(): boolean {
  * Disconnect from the agent
  */
 export async function disconnectMcpClient(): Promise<void> {
-    // if (mcpClient && isConnected) {
-    //     await mcpClient.close();
-    //     isConnected = false;
-    // }
-    console.log('[MCP] Client disconnected');
+    if (isConnected) {
+        isConnected = false;
+        mcpConfig = null;
+        console.log('[MCP] Client disconnected');
+    }
 }
 
 // =============================================================================
@@ -152,93 +154,129 @@ export async function disconnectMcpClient(): Promise<void> {
 
 /**
  * List available tools (skills) from the agent
- * 
- * @returns Array of tool definitions
- * 
- * TODO: Implement with actual MCP SDK
  */
 export async function listAgentTools(): Promise<AgentTool[]> {
-    // if (!mcpClient || !isConnected) {
-    //     throw new Error('MCP client not connected');
-    // }
+    if (!mcpConfig || !isConnected) {
+        throw new Error('MCP client not connected');
+    }
 
-    // const response = await mcpClient.listTools();
-    // return response.tools.map((tool: any) => ({
-    //     name: tool.name,
-    //     description: tool.description,
-    //     inputSchema: tool.inputSchema
-    // }));
+    try {
+        const response = await fetch(`${mcpConfig.agentUrl}/tools`, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
 
-    throw new Error('listAgentTools() not implemented');
+        if (!response.ok) {
+            throw new Error(`Failed to list tools: ${response.statusText}`);
+        }
+
+        const data: any = await response.json();
+        return data.tools || [];
+
+    } catch (error) {
+        console.error('[MCP] Error listing agent tools:', error);
+        throw error;
+    }
 }
 
 /**
  * Execute a freelance task by calling the agent's tool
  * 
  * This is the main function called when a job moves to 'working' status
- * 
- * @param taskSpec - Specification of the task to perform
- * @returns Result from the agent
- * 
- * IMPLEMENTATION:
- * 1. Validate client is connected
- * 2. Determine which tool to call based on taskType
- * 3. Call the tool with task spec
- * 4. Parse and return the result
- * 5. Handle errors and timeouts
- * 
- * TODO: Implement with actual MCP SDK
  */
 export async function executeFreelanceTask(
     taskSpec: FreelanceTaskSpec
 ): Promise<FreelanceTaskResult> {
-    // if (!mcpClient || !isConnected) {
-    //     throw new Error('MCP client not connected');
-    // }
+    if (!mcpConfig || !isConnected) {
+        return {
+            success: false,
+            content: '',
+            contentType: 'text',
+            error: 'MCP client not connected. Call initializeMcpClient() first.'
+        };
+    }
 
-    // const toolName = 'execute_freelance_task';
+    console.log(`[MCP] Executing task for job ${taskSpec.jobId}: ${taskSpec.taskType}`);
 
-    // try {
-    //     const result = await mcpClient.callTool({
-    //         name: toolName,
-    //         arguments: {
-    //             jobId: taskSpec.jobId,
-    //             title: taskSpec.title,
-    //             requirements: taskSpec.requirements,
-    //             taskType: taskSpec.taskType,
-    //             context: taskSpec.context || {}
-    //         }
-    //     });
-    //     
-    //     // Parse result
-    //     if (result.isError) {
-    //         return {
-    //             success: false,
-    //             content: '',
-    //             contentType: 'text',
-    //             error: result.content?.[0]?.text || 'Unknown error'
-    //         };
-    //     }
-    //     
-    //     const content = result.content?.[0]?.text || '';
-    //     return {
-    //         success: true,
-    //         content,
-    //         contentType: detectContentType(content),
-    //         metadata: {
-    //             executionTime: result.executionTime
-    //         }
-    //     };
-    // } catch (error) {
-    //     return {
-    //         success: false,
-    //         content: '',
-    //         contentType: 'text',
-    //         error: error instanceof Error ? error.message : 'Task execution failed'
-    //     };
-    // }
+    try {
+        // Call agent-service HTTP endpoint
+        const response = await fetch(`${mcpConfig.agentUrl}/execute-task`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                jobId: taskSpec.jobId,
+                title: taskSpec.title,
+                requirements: taskSpec.requirements,
+                taskType: taskSpec.taskType,
+                context: taskSpec.context || {},
+                timeout: taskSpec.timeout || 300 // 5 minutes default
+            }),
+            signal: AbortSignal.timeout(mcpConfig.timeout)
+        });
 
-    throw new Error('executeFreelanceTask() not implemented');
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Agent returned error ${response.status}: ${errorText}`);
+        }
+
+        const result: any = await response.json();
+
+        // Parse agent response
+        if (result.success === false || result.error) {
+            return {
+                success: false,
+                content: result.content || '',
+                contentType: 'text',
+                error: result.error || 'Task execution failed'
+            };
+        }
+
+        console.log(`[MCP] Task completed successfully for job ${taskSpec.jobId}`);
+
+        return {
+            success: true,
+            content: result.content || result.output || '',
+            contentType: detectContentType(result.content || result.output || ''),
+            metadata: {
+                executionTime: result.executionTime,
+                language: result.language,
+                linesOfCode: result.linesOfCode,
+                filesCreated: result.filesCreated
+            }
+        };
+
+    } catch (error) {
+        console.error(`[MCP] Error executing task for job ${taskSpec.jobId}:`, error);
+
+        if (error instanceof TypeError && error.message.includes('fetch')) {
+            return {
+                success: false,
+                content: '',
+                contentType: 'text',
+                error: 'Failed to connect to agent service. Is it running?'
+            };
+        }
+
+        if (error instanceof Error && error.name === 'TimeoutError') {
+            return {
+                success: false,
+                content: '',
+                contentType: 'text',
+                error: `Task timed out after ${mcpConfig.timeout / 1000} seconds`
+            };
+        }
+
+        return {
+            success: false,
+            content: '',
+            contentType: 'text',
+            error: error instanceof Error ? error.message : 'Unknown error occurred'
+        };
+    }
 }
 
 /**
@@ -352,16 +390,23 @@ function detectContentType(content: string): FreelanceTaskResult['contentType'] 
 
 /**
  * Health check for MCP connection
- * 
- * @returns true if agent is reachable and responsive
  */
 export async function checkAgentHealth(): Promise<boolean> {
-    // try {
-    //     if (!mcpClient || !isConnected) return false;
-    //     await mcpClient.ping();
-    //     return true;
-    // } catch {
-    //     return false;
-    // }
-    return false;
+    if (!mcpConfig || !isConnected) {
+        return false;
+    }
+
+    try {
+        const response = await fetch(`${mcpConfig.agentUrl}/health`, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            signal: AbortSignal.timeout(5000) // 5 second timeout
+        });
+
+        return response.ok;
+    } catch {
+        return false;
+    }
 }

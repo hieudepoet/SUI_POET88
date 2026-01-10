@@ -20,12 +20,12 @@ import dotenv from 'dotenv';
 // Import route modules
 import jobRoutes from './routes/jobs.js';
 import agentRoutes from './routes/agents.js';
-import paymentRoutes from './routes/payments.js';
 import userRoutes from './routes/users.js';
+import poolRoutes from './routes/pools.js';
+import chatRoutes from './routes/chat.js';
 
 // Import services
-import { initializeDatabase } from './db/database.js';
-import { initializeBeepClient } from './services/beep.js';
+import { initializeDatabase, getDb } from './db/database.js';
 import { startPaymentPolling } from './services/payment-poller.js';
 import { initializeSuiClient } from './services/sui.js';
 
@@ -44,11 +44,13 @@ const PORT = process.env.PORT || 3000;
 // =============================================================================
 
 // CORS configuration
-// TODO: Configure CORS origins based on environment
 app.use(cors({
-    origin: process.env.CORS_ORIGINS?.split(',') || ['http://localhost:3000', 'http://localhost:5173'],
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    origin: ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-wallet-address'],
+    credentials: true,
+    preflightContinue: false,
+    optionsSuccessStatus: 204
 }));
 
 // Parse JSON bodies
@@ -81,11 +83,22 @@ app.get('/health', (req: Request, res: Response) => {
 const API_PREFIX = '/api/v1';
 
 // Mount route handlers
-// TODO: Implement each route module
 app.use(`${API_PREFIX}/jobs`, jobRoutes);
 app.use(`${API_PREFIX}/agents`, agentRoutes);
-app.use(`${API_PREFIX}/payments`, paymentRoutes);
 app.use(`${API_PREFIX}/users`, userRoutes);
+app.use(`${API_PREFIX}/pools`, poolRoutes);
+app.use(`${API_PREFIX}/chat`, chatRoutes);
+
+// MCP endpoint for AI integration
+import { createMcpHttpHandler } from './mcp-server.js';
+app.post('/mcp', createMcpHttpHandler({
+    logger: {
+        debug: (msg: string, obj?: any) => console.log(`[MCP DEBUG] ${msg}`, obj || ''),
+        log: (msg: string, obj?: any) => console.log(`[MCP INFO] ${msg}`, obj || ''),
+        error: (msg: string, obj?: any) => console.error(`[MCP ERROR] ${msg}`, obj || ''),
+        warn: (msg: string, obj?: any) => console.warn(`[MCP WARN] ${msg}`, obj || ''),
+    }
+}));
 
 // =============================================================================
 // ERROR HANDLING
@@ -131,13 +144,7 @@ async function startServer(): Promise<void> {
         await initializeDatabase();
         console.log('✅ Database connected');
 
-        // Step 2: Initialize Beep Pay client
-        console.log('💰 Initializing Beep Pay client...');
-        await initializeBeepClient();
-        console.log('✅ Beep Pay client initialized');
-
         // Step 3: Start payment polling service
-        // This runs in the background to detect when invoices are paid
         console.log('🔄 Starting payment poller...');
         startPaymentPolling();
         console.log('✅ Payment poller started');

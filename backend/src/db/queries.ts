@@ -55,6 +55,33 @@ export type JobStatus =
     | 'cancelled'
     | 'disputed';
 
+export interface UserPool {
+    id: number;
+    user_id: number;
+    pool_address: string;
+    pool_object_id: string;
+    agent_address: string;
+    balance_usdc: number;
+    total_deposited: number;
+    total_spent: number;
+    spending_limit: number;
+    is_active: boolean;
+    created_at: Date;
+    updated_at: Date;
+    blockchain_created_at: number | null;
+}
+
+export interface PoolTransaction {
+    id: number;
+    pool_id: number;
+    type: 'deposit' | 'spend' | 'withdraw' | 'refund';
+    amount_usdc: number;
+    job_id: number | null;
+    tx_digest: string | null;
+    purpose: string | null;
+    created_at: Date;
+}
+
 // =============================================================================
 // USER QUERIES
 // =============================================================================
@@ -97,7 +124,7 @@ export async function createUser(
                 wallet_address, 
                 role, 
                 display_name
-            ) VALUE ($1, $2, $3)
+            ) VALUES ($1, $2, $3)
             RETURNING *`,
             [walletAddress, role, displayName || null]
         )
@@ -112,15 +139,34 @@ export async function createUser(
 /**
  * Get or create a user by wallet address
  * Creates a buyer account if user doesn't exist
+ * Agent wallet is automatically available via getAgentAddress(userId)
  */
 export async function getOrCreateUser(walletAddress: string): Promise<User> {
     try {
         const existing = await findUserByWallet(walletAddress);
-        if (existing) return existing;
-        return createUser(walletAddress, 'buyer');
+        if (existing) {
+            return existing;
+        }
+        
+        // Create new user - agent wallet auto-generated from ID
+        const user = await createUser(walletAddress, 'buyer');
+        return user;
     } catch (err) {
         console.error('Error getting or creating user:', err);
         throw err;
+    }
+}
+
+export async function getUserById(id: number): Promise<User | null> {
+    try {
+        const result = await query<User>(
+            `SELECT * FROM users WHERE id = $1`,
+            [id]
+        )
+        return result.rows[0] || null;
+    } catch (error) {
+        console.error('Error finding user by id:', error);
+        return null;
     }
 }
 
@@ -236,29 +282,42 @@ export async function createJob(
     agentId?: number
 ): Promise<Job> {
     try {
-        const referenceKey = `BL-${Date.now()}-${Math.random().toString(36).substring(7)}`;
-        
+        // referenceKey will be set when invoice is created via Beep SDK
         const result = await query<Job>(
             `INSERT INTO jobs (
                 title,
                 buyer_id,
                 agent_id,
                 amount_usdc,
-                requirements,
-                reference_key
+                requirements
             ) VALUES (
                 $1,
                 $2,
                 $3,
                 $4,
-                $5,
-                $6
+                $5
             ) RETURNING *`,
-            [title, buyerId, agentId || null, amountUsdc, requirements || null, referenceKey]
+            [title, buyerId, agentId || null, amountUsdc, requirements || null]
         );
         return result.rows[0];
     } catch (err) {
         console.log('Error creating job: ', err);
+        throw err;
+    }
+}
+
+export async function updateJobReferenceKeyById(jobId: number, referenceKey?: string): Promise<Job> {
+    try {
+        const result = await query<Job>(
+            `UPDATE jobs
+            SET reference_key = $2
+            WHERE id = $1
+            RETURNING *`,
+            [jobId, referenceKey]
+        );
+        return result.rows[0];
+    } catch (err) {
+        console.log('Error updating job reference key: ', err);
         throw err;
     }
 }
@@ -305,6 +364,7 @@ export async function updateJobStatus(
     status: JobStatus,
     additionalFields?: Partial<{
         beep_invoice_id: string;
+        reference_key: string;
         escrow_object_id: string;
         escrow_tx_digest: string;
         release_tx_digest: string;
@@ -320,6 +380,11 @@ export async function updateJobStatus(
             if (additionalFields.beep_invoice_id) {
                 updates.push(`beep_invoice_id = $${paramIndex}`);
                 params.push(additionalFields.beep_invoice_id);
+                paramIndex++;
+            }
+            if (additionalFields.reference_key) {
+                updates.push(`reference_key = $${paramIndex}`);
+                params.push(additionalFields.reference_key);
                 paramIndex++;
             }
             if (additionalFields.escrow_object_id) {
@@ -473,6 +538,378 @@ export async function getJobsByAgent(
         return result.rows;
     } catch (err) {
         console.error('Error getting jobs by agent:', err);
+        throw err;
+    }
+}
+
+// =============================================================================
+// USER POOL QUERIES
+// =============================================================================
+
+/**
+ * Create a new user pool record
+ */
+export async function createUserPool(
+    userId: number,
+    poolAddress: string,
+    poolObjectId: string,
+    agentAddress: string,
+    spendingLimit: number,
+    blockchainCreatedAt?: number
+): Promise<UserPool> {
+    try {
+        const result = await query<UserPool>(
+            `INSERT INTO user_pools 
+            (user_id, pool_address, pool_object_id, agent_address, spending_limit, blockchain_created_at)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING *`,
+            [userId, poolAddress, poolObjectId, agentAddress, spendingLimit, blockchainCreatedAt || null]
+        );
+        return result.rows[0];
+    } catch (err) {
+        console.error('Error creating user pool:', err);
+        throw err;
+    }
+}
+
+/**
+ * Get pool by user ID
+ */
+export async function getPoolByUser(userId: number): Promise<UserPool | null> {
+    try {
+        const result = await query<UserPool>(
+            `SELECT * FROM user_pools WHERE user_id = $1 AND is_active = true`,
+            [userId]
+        );
+        return result.rows[0] || null;
+    } catch (err) {
+        console.error('Error getting pool by user:', err);
+        throw err;
+    }
+}
+
+/**
+ * Get pool by object ID
+ */
+export async function getPoolByObjectId(poolObjectId: string): Promise<UserPool | null> {
+    try {
+        const result = await query<UserPool>(
+            `SELECT * FROM user_pools WHERE pool_object_id = $1`,
+            [poolObjectId]
+        );
+        return result.rows[0] || null;
+    } catch (err) {
+        console.error('Error getting pool by object ID:', err);
+        throw err;
+    }
+}
+
+/**
+ * Update pool balance (sync from blockchain)
+ */
+export async function updatePoolBalance(
+    poolId: number,
+    balanceUsdc: number,
+    totalDeposited?: number,
+    totalSpent?: number
+): Promise<UserPool> {
+    try {
+        let queryText = `UPDATE user_pools SET balance_usdc = $1, updated_at = NOW()`;
+        const params: any[] = [balanceUsdc];
+        let paramCount = 2;
+
+        if (totalDeposited !== undefined) {
+            queryText += `, total_deposited = $${paramCount}`;
+            params.push(totalDeposited);
+            paramCount++;
+        }
+
+        if (totalSpent !== undefined) {
+            queryText += `, total_spent = $${paramCount}`;
+            params.push(totalSpent);
+            paramCount++;
+        }
+
+        queryText += ` WHERE id = $${paramCount} RETURNING *`;
+        params.push(poolId);
+
+        const result = await query<UserPool>(queryText, params);
+        return result.rows[0];
+    } catch (err) {
+        console.error('Error updating pool balance:', err);
+        throw err;
+    }
+}
+
+/**
+ * Record a pool transaction
+ */
+export async function createPoolTransaction(
+    poolId: number,
+    type: 'deposit' | 'spend' | 'withdraw' | 'refund',
+    amount: number,
+    txDigest?: string,
+    jobId?: number,
+    purpose?: string
+): Promise<PoolTransaction> {
+    try {
+        const result = await query<PoolTransaction>(
+            `INSERT INTO pool_transactions 
+            (pool_id, type, amount_usdc, tx_digest, job_id, purpose)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING *`,
+            [poolId, type, amount, txDigest || null, jobId || null, purpose || null]
+        );
+        return result.rows[0];
+    } catch (err) {
+        console.error('Error creating pool transaction:', err);
+        throw err;
+    }
+}
+
+/**
+ * Get pool transaction history
+ */
+export async function getPoolTransactions(
+    poolId: number,
+    limit: number = 50
+): Promise<PoolTransaction[]> {
+    try {
+        const result = await query<PoolTransaction>(
+            `SELECT * FROM pool_transactions 
+            WHERE pool_id = $1 
+            ORDER BY created_at DESC 
+            LIMIT $2`,
+            [poolId, limit]
+        );
+        return result.rows;
+    } catch (err) {
+        console.error('Error getting pool transactions:', err);
+        throw err;
+    }
+}
+
+/**
+ * Deactivate a pool
+ */
+export async function deactivatePool(poolId: number): Promise<UserPool> {
+    try {
+        const result = await query<UserPool>(
+            `UPDATE user_pools SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING *`,
+            [poolId]
+        );
+        return result.rows[0];
+    } catch (err) {
+        console.error('Error deactivating pool:', err);
+        throw err;
+    }
+}
+
+// =============================================================================
+// JOB DELIVERIES QUERIES
+// =============================================================================
+
+/**
+ * Create a job delivery
+ */
+export async function createDelivery(
+    jobId: number,
+    content: string,
+    deliveryType: string = 'text',
+    externalUrl?: string,
+    notes?: string
+): Promise<number> {
+    try {
+        const result = await query<{ id: number }>(
+            `INSERT INTO job_deliveries (job_id, content, delivery_type, external_url, notes)
+             VALUES ($1, $2, $3, $4, $5)
+             RETURNING id`,
+            [jobId, content, deliveryType, externalUrl || null, notes || null]
+        );
+        return result.rows[0].id;
+    } catch (err) {
+        console.error('Error creating delivery:', err);
+        throw err;
+    }
+}
+
+/**
+ * Get deliveries for a job
+ */
+export async function getDeliveriesByJob(jobId: number): Promise<any[]> {
+    try {
+        const result = await query(
+            `SELECT * FROM job_deliveries WHERE job_id = $1 ORDER BY created_at DESC`,
+            [jobId]
+        );
+        return result.rows;
+    } catch (err) {
+        console.error('Error getting deliveries:', err);
+        throw err;
+    }
+}
+
+// =============================================================================
+// USER UPDATE QUERIES
+// =============================================================================
+
+/**
+ * Update user profile
+ */
+export async function updateUser(
+    userId: number,
+    displayName?: string,
+    email?: string
+): Promise<User> {
+    try {
+        let queryText = 'UPDATE users SET';
+        const params: any[] = [];
+        const updates: string[] = [];
+        let paramCount = 1;
+
+        if (displayName !== undefined) {
+            updates.push(` display_name = $${paramCount}`);
+            params.push(displayName);
+            paramCount++;
+        }
+
+        if (email !== undefined) {
+            updates.push(` email = $${paramCount}`);
+            params.push(email);
+            paramCount++;
+        }
+
+        if (updates.length === 0) {
+            throw new Error('No updates provided');
+        }
+
+        queryText += updates.join(',');
+        queryText += ` WHERE id = $${paramCount} RETURNING *`;
+        params.push(userId);
+
+        const result = await query<User>(queryText, params);
+        return result.rows[0];
+    } catch (err) {
+        console.error('Error updating user:', err);
+        throw err;
+    }
+}
+
+// =============================================================================
+// AGENT UPDATE QUERIES
+// =============================================================================
+
+/**
+ * Update agent profile
+ */
+export async function updateAgent(
+    agentId: number,
+    updates: {
+        mcpEndpoint?: string;
+        hourlyRate?: number;
+        description?: string;
+        isAvailable?: boolean;
+    }
+): Promise<Agent> {
+    try {
+        const fields: string[] = [];
+        const values: any[] = [];
+        let paramCount = 1;
+
+        if (updates.mcpEndpoint !== undefined) {
+            fields.push(`mcp_endpoint = $${paramCount}`);
+            values.push(updates.mcpEndpoint);
+            paramCount++;
+        }
+
+        if (updates.hourlyRate !== undefined) {
+            fields.push(`hourly_rate = $${paramCount}`);
+            values.push(updates.hourlyRate);
+            paramCount++;
+        }
+
+        if (updates.description !== undefined) {
+            fields.push(`description = $${paramCount}`);
+            values.push(updates.description);
+            paramCount++;
+        }
+
+        if (updates.isAvailable !== undefined) {
+            fields.push(`is_available = $${paramCount}`);
+            values.push(updates.isAvailable);
+            paramCount++;
+        }
+
+        if (fields.length === 0) {
+            throw new Error('No updates provided');
+        }
+
+        fields.push(`updated_at = NOW()`);
+
+        const result = await query<Agent>(
+            `UPDATE agents SET ${fields.join(', ')} WHERE id = $${paramCount} RETURNING *`,
+            [...values, agentId]
+        );
+
+        if (!result.rows[0]) {
+            throw new Error('Agent not found');
+        }
+
+        return result.rows[0];
+    } catch (err) {
+        console.error('Error updating agent:', err);
+        throw err;
+    }
+}
+
+/**
+ * Update agent skills
+ */
+export async function updateAgentSkills(
+    agentId: number,
+    skills: string[]
+): Promise<Agent> {
+    try {
+        const result = await query<Agent>(
+            `UPDATE agents SET skills = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+            [skills, agentId]
+        );
+        
+        if (!result.rows[0]) {
+            throw new Error('Agent not found');
+        }
+        
+        return result.rows[0];
+    } catch (err) {
+        console.error('Error updating agent skills:', err);
+        throw err;
+    }
+}
+
+/**
+ * Get all jobs with optional filters
+ */
+export async function getAllJobs(
+    status?: string,
+    limit: number = 50,
+    offset: number = 0
+): Promise<Job[]> {
+    try {
+        let queryText = 'SELECT * FROM jobs';
+        const params: any[] = [];
+        
+        if (status) {
+            queryText += ' WHERE status = $1';
+            params.push(status);
+        }
+        
+        queryText += ` ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+        params.push(limit, offset);
+        
+        const result = await query<Job>(queryText, params);
+        return result.rows;
+    } catch (err) {
+        console.error('Error getting all jobs:', err);
         throw err;
     }
 }

@@ -81,6 +81,16 @@ export async function initializeDatabase(): Promise<void> {
 }
 
 /**
+ * Get database pool instance
+ */
+export function getDb(): Pool {
+    if (!pool) {
+        throw new Error('Database not initialized. Call initializeDatabase() first.');
+    }
+    return pool;
+}
+
+/**
  * Execute a SQL query with parameterized values
  * 
  * @param text - SQL query string with $1, $2, etc. placeholders

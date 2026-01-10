@@ -16,10 +16,12 @@
  * =============================================================================
  */
 
-import { getInvoice } from './beep.js';
-import { getUnpaidJobsWithInvoices, markJobAsEscrowed, updateJobStatus } from '../db/queries.js';
+import { beepSDKService } from './beep-sdk.js';
+import { getUnpaidJobsWithInvoices, markJobAsEscrowed, updateJobStatus, getUserById } from '../db/queries.js';
 import { createEscrow } from './sui.js';
-import { executeFreelanceTask } from './mcp-client.js';
+// import { executeFreelanceTask } from './mcp-client.js'; // Removed - not using MCP
+import { Transaction } from '@mysten/sui/transactions';
+import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 
 // =============================================================================
 // TYPES
@@ -45,7 +47,7 @@ let isPolling = false;
 const config: PollerConfig = {
     intervalMs: 10000,  // 10 seconds
     maxRetries: 3,
-    autoTriggerAgent: true
+    autoTriggerAgent: false // Disabled - no MCP agent
 };
 
 // =============================================================================
@@ -54,8 +56,6 @@ const config: PollerConfig = {
 
 /**
  * Start the payment polling service
- * 
- * @param customConfig - Optional custom configuration
  */
 export function startPaymentPolling(customConfig?: Partial<PollerConfig>): void {
     if (pollerInterval) {
@@ -86,13 +86,6 @@ export function stopPaymentPolling(): void {
 
 /**
  * Main polling function - checks for paid invoices
- * 
- * IMPLEMENTATION:
- * 1. Get all unpaid jobs that have invoice IDs
- * 2. For each job, check invoice status with Beep API
- * 3. If paid, process the payment
- * 
- * TODO: Implement with actual service calls
  */
 async function pollForPayments(): Promise<void> {
     // Prevent overlapping polls
@@ -105,37 +98,64 @@ async function pollForPayments(): Promise<void> {
 
     try {
         // Step 1: Get unpaid jobs with invoices
-        // const unpaidJobs = await getUnpaidJobsWithInvoices();
+        const unpaidJobs = await getUnpaidJobsWithInvoices();
 
-        // if (unpaidJobs.length === 0) {
-        //     return; // No pending invoices
-        // }
+        if (unpaidJobs.length === 0) {  
+            return;
+        }
 
-        // console.log(`[PaymentPoller] Checking ${unpaidJobs.length} pending invoices`);
+        console.log(`[PaymentPoller] Checking ${unpaidJobs.length} pending invoices`);
 
-        // Step 2: Check each invoice
-        // for (const job of unpaidJobs) {
-        //     if (!job.beep_invoice_id) continue;
-        //     
-        //     try {
-        //         const invoice = await getInvoice(job.beep_invoice_id);
-        //         
-        //         if (invoice.status === 'paid') {
-        //             console.log(`[PaymentPoller] Payment detected for job ${job.id}`);
-        //             await processPayment(job);
-        //         } else if (invoice.status === 'expired') {
-        //             console.log(`[PaymentPoller] Invoice expired for job ${job.id}`);
-        //             await updateJobStatus(job.id, 'cancelled');
-        //         }
-        //     } catch (error) {
-        //         console.error(`[PaymentPoller] Error checking job ${job.id}:`, error);
-        //     }
-        // }
+        // Step 2: Check each invoice status
+        for (const job of unpaidJobs) {
+            if (!job.beep_invoice_id) {
+                console.warn(`[PaymentPoller] Job ${job.id} has no invoice ID, skipping`);
+                continue;
+            }
+            
+            try {
+                // Query Beep API for invoice status
+                console.log(`[PaymentPoller] Checking invoice ${job.beep_invoice_id} for job ${job.id}...`);
+                const invoice = await beepSDKService.getPaymentStatus(job.beep_invoice_id);
+                
+                if (invoice.status === 'paid') {
+                    console.log(`[PaymentPoller] ✅ Payment detected for job ${job.id}`);
+                    await processPayment(job);
+                } else if (invoice.status === 'expired') {
+                    console.log(`[PaymentPoller] ⏰ Invoice expired for job ${job.id}`);
+                    await updateJobStatus(job.id, 'cancelled');
+                } else {
+                    // Still pending - do nothing
+                    console.log(`[PaymentPoller] ⏳ Job ${job.id} still pending (${invoice.status})`);
+                }
+            } catch (error: any) {
+                // Handle specific error cases
+                if (error.response?.status === 400 || error.status === 400 || error.code === 'ERR_BAD_REQUEST') {
+                    // 400 = Invoice not found or expired
+                    console.warn(`[PaymentPoller] ⚠️ Invoice ${job.beep_invoice_id} not found or expired (job ${job.id})`);
+                    console.warn(`[PaymentPoller] Marking job ${job.id} as cancelled`);
+                    
+                    try {
+                        await updateJobStatus(job.id, 'cancelled');
+                    } catch (updateError) {
+                        console.error(`[PaymentPoller] Failed to cancel job ${job.id}:`, updateError);
+                    }
+                } else if (error.response?.status === 401 || error.status === 401) {
+                    // 401 = Authentication error - critical, log and skip
+                    console.error(`[PaymentPoller] ❌ Authentication error for job ${job.id}. Check BEEP_API_KEY!`);
+                } else {
+                    // Other errors - log and continue
+                    console.error(`[PaymentPoller] ❌ Error checking job ${job.id}:`, error.message || error);
+                }
+                
+                // Continue with other jobs even if one fails
+            }
+        }
 
-        console.log('[PaymentPoller] Poll cycle - TODO: Implement');
+        console.log(`[PaymentPoller] ✓ Poll cycle completed`);
 
     } catch (error) {
-        console.error('[PaymentPoller] Error during polling:', error);
+        console.error('[PaymentPoller] ❌ Error during polling:', error);
     } finally {
         isPolling = false;
     }
@@ -148,92 +168,85 @@ async function pollForPayments(): Promise<void> {
 /**
  * Process a detected payment
  * 
- * @param job - The job that was paid
- * 
  * WORKFLOW:
  * 1. Create escrow on SUI blockchain
  * 2. Update job status to 'escrowed' with blockchain details
  * 3. Optionally trigger MCP agent to start work
- * 
- * TODO: Implement full payment processing
  */
 async function processPayment(job: any): Promise<void> {
-    // const jobId = job.id;
+    const jobId = job.id;
 
-    // try {
-    //     // Step 1: Create escrow on SUI
-    //     console.log(`[PaymentPoller] Creating escrow for job ${jobId}`);
-    //     
-    //     // Get agent wallet address
-    //     // const agentWallet = await getAgentWallet(job.agent_id);
-    //     
-    //     // const escrowResult = await createEscrow({
-    //     //     buyerAddress: job.buyer_wallet, // Need to join with users table
-    //     //     agentAddress: agentWallet,
-    //     //     amountUsdc: job.amount_usdc,
-    //     //     jobReference: job.reference_key,
-    //     //     usdcCoinId: 'TODO: Get from payment' // Need payment details
-    //     // });
-    //     
-    //     // if (!escrowResult.success) {
-    //     //     throw new Error(`Escrow creation failed: ${escrowResult.error}`);
-    //     // }
-    //     
-    //     // Step 2: Update job in database
-    //     // await markJobAsEscrowed(
-    //     //     jobId,
-    //     //     job.beep_invoice_id,
-    //     //     escrowResult.escrowObjectId,
-    //     //     escrowResult.txDigest
-    //     // );
-    //     
-    //     console.log(`[PaymentPoller] Job ${jobId} escrowed successfully`);
-    //     
-    //     // Step 3: Trigger agent if auto-trigger is enabled
-    //     if (config.autoTriggerAgent) {
-    //         await triggerAgentWork(job);
-    //     }
-    //     
-    // } catch (error) {
-    //     console.error(`[PaymentPoller] Failed to process payment for job ${jobId}:`, error);
-    //     // TODO: Implement retry logic or error handling
-    // }
+    try {
+        console.log(`[PaymentPoller] 🔒 Creating escrow for job ${jobId}...`);
+        
+        // Get buyer and agent wallet addresses from database
+        const buyer = await getUserById(job.buyer_id);
+        if (!buyer) {
+            throw new Error(`Buyer not found for job ${jobId}`);
+        }
 
-    console.log('[PaymentPoller] processPayment() - TODO: Implement');
+        const agent = job.agent_id ? await getUserById(job.agent_id) : null;
+        if (!agent && job.agent_id) {
+            throw new Error(`Agent not found for job ${jobId}`);
+        }
+
+        // Get platform USDC coin to lock in escrow
+        // Platform receives USDC from Beep, then locks it on-chain
+        const platformUsdcCoin = await getPlatformUsdcCoin(job.amount_usdc);
+        
+        // Create escrow on SUI blockchain
+        const escrowResult = await createEscrow({
+            buyerAddress: buyer.wallet_address,
+            agentAddress: agent ? agent.wallet_address : buyer.wallet_address, // Fallback to buyer if no agent yet
+            amountUsdc: job.amount_usdc,
+            jobReference: job.reference_key,
+            usdcCoinId: platformUsdcCoin
+        });
+        
+        if (!escrowResult.success) {
+            throw new Error(`Escrow creation failed: ${escrowResult.error}`);
+        }
+        
+        console.log(`[PaymentPoller] ✅ Escrow created: ${escrowResult.escrowObjectId}`);
+        
+        // Update job in database
+        await markJobAsEscrowed(
+            jobId,
+            job.beep_invoice_id,
+            escrowResult.escrowObjectId,
+            escrowResult.txDigest
+        );
+        
+        console.log(`[PaymentPoller] 📝 Job ${jobId} marked as escrowed`);
+        
+        // Trigger agent if auto-trigger is enabled
+        if (config.autoTriggerAgent && job.agent_id) {
+            console.log(`[PaymentPoller] 🤖 Triggering agent for job ${jobId}...`);
+            await triggerAgentWork(job);
+        }
+        
+        console.log(`[PaymentPoller] ✅ Payment processed successfully for job ${jobId}`);
+        
+    } catch (error) {
+        console.error(`[PaymentPoller] ❌ Failed to process payment for job ${jobId}:`, error);
+        
+        // Job will be picked up in next poll cycle for retry
+        // Could implement exponential backoff here if needed
+    }
 }
 
 /**
  * Trigger the MCP agent to start working on a job
  * 
- * @param job - The escrowed job
- * 
- * TODO: Implement agent triggering
+ * DISABLED: MCP client not implemented yet.
+ * Jobs will remain in 'escrowed' status until manually started.
  */
 async function triggerAgentWork(job: any): Promise<void> {
-    // console.log(`[PaymentPoller] Triggering agent for job ${job.id}`);
-
-    // Update status to 'working'
-    // await updateJobStatus(job.id, 'working');
-
-    // Execute the freelance task
-    // const result = await executeFreelanceTask({
-    //     jobId: job.id,
-    //     title: job.title,
-    //     requirements: job.requirements,
-    //     taskType: inferTaskType(job), // Determine from job details
-    // });
-
-    // if (result.success) {
-    //     // Save delivery and update status
-    //     // await saveDelivery(job.id, result);
-    //     // await updateJobStatus(job.id, 'delivered');
-    //     console.log(`[PaymentPoller] Job ${job.id} delivered`);
-    // } else {
-    //     console.error(`[PaymentPoller] Agent failed for job ${job.id}:`, result.error);
-    //     // Could retry or mark as failed
-    // }
-
-    console.log('[PaymentPoller] triggerAgentWork() - TODO: Implement');
+    console.log(`[PaymentPoller] ⚠️ Agent auto-trigger disabled. Job ${job.id} is escrowed.`);
+    console.log(`[PaymentPoller] 👤 Agent must manually accept and work on this job.`);
+    
+    // Just update to 'working' status - manual workflow
+    await updateJobStatus(job.id, 'working');
 }
 
 // =============================================================================
@@ -241,12 +254,230 @@ async function triggerAgentWork(job: any): Promise<void> {
 // =============================================================================
 
 /**
+ * Get platform USDC coin to lock in escrow
+ * 
+ * DYNAMIC COIN MANAGEMENT:
+ * 1. Query platform wallet for all USDC coins
+ * 2. Find exact match OR
+ * 3. Split larger coin OR
+ * 4. Merge smaller coins
+ */
+async function getPlatformUsdcCoin(amountUsdc: number): Promise<string> {
+    const suiClient = await import('./sui.js').then(m => m.getSuiClient());
+    const platformAddress = process.env.PLATFORM_WALLET_ADDRESS || process.env.SUI_PLATFORM_ADDRESS;
+    const usdc_coin_type = process.env.USDC_COIN_TYPE || '0x2::sui::SUI'; // Fallback to SUI for testnet
+    
+    if (!platformAddress) {
+        throw new Error(
+            'PLATFORM_WALLET_ADDRESS not set. ' +
+            'Platform must have a wallet to manage USDC coins.'
+        );
+    }
+
+    try {
+        console.log(`[CoinManager] Finding USDC coin for ${amountUsdc} USDC...`);
+
+        // Query all USDC coins owned by platform
+        const coins = await suiClient.getCoins({
+            owner: platformAddress,
+            coinType: usdc_coin_type
+        });
+
+        if (!coins.data || coins.data.length === 0) {
+            throw new Error(
+                `No USDC coins found in platform wallet ${platformAddress}. ` +
+                'Platform needs to be funded with USDC first.'
+            );
+        }
+
+        // Convert amount to smallest unit (assuming 6 decimals for USDC)
+        const amountInSmallestUnit = Math.floor(amountUsdc * 1_000_000);
+
+        console.log(`[CoinManager] Found ${coins.data.length} USDC coins, looking for ${amountInSmallestUnit} units`);
+
+        // Strategy 1: Find exact match
+        const exactMatch = coins.data.find(coin => 
+            parseInt(coin.balance) === amountInSmallestUnit
+        );
+
+        if (exactMatch) {
+            console.log(`[CoinManager] ✅ Found exact match: ${exactMatch.coinObjectId}`);
+            return exactMatch.coinObjectId;
+        }
+
+        // Strategy 2: Find coin larger than needed (will be split)
+        const largerCoin = coins.data
+            .filter(coin => parseInt(coin.balance) > amountInSmallestUnit)
+            .sort((a, b) => parseInt(a.balance) - parseInt(b.balance))[0]; // Smallest sufficient coin
+
+        if (largerCoin) {
+            console.log(`[CoinManager] 💰 Found larger coin (${largerCoin.balance}), will split...`);
+            const splitCoin = await splitPlatformCoin(
+                largerCoin.coinObjectId,
+                amountInSmallestUnit
+            );
+            console.log(`[CoinManager] ✅ Split complete: ${splitCoin}`);
+            return splitCoin;
+        }
+
+        // Strategy 3: Merge smaller coins
+        const totalBalance = coins.data.reduce((sum, coin) => 
+            sum + parseInt(coin.balance), 0
+        );
+
+        if (totalBalance < amountInSmallestUnit) {
+            throw new Error(
+                `Insufficient USDC balance. ` +
+                `Need: ${amountInSmallestUnit}, Have: ${totalBalance}. ` +
+                `Platform wallet needs more USDC.`
+            );
+        }
+
+        console.log(`[CoinManager] 🔄 No single coin sufficient, merging...`);
+        const mergedCoin = await mergePlatformCoins(coins.data, amountInSmallestUnit);
+        console.log(`[CoinManager] ✅ Merge complete: ${mergedCoin}`);
+        return mergedCoin;
+
+    } catch (error) {
+        console.error('[CoinManager] ❌ Error managing platform USDC:', error);
+        
+        // Fallback to env variable for emergency cases
+        const fallbackCoin = process.env.PLATFORM_USDC_COIN_ID;
+        if (fallbackCoin) {
+            console.warn(`[CoinManager] ⚠️ Using fallback coin from env: ${fallbackCoin}`);
+            return fallbackCoin;
+        }
+        
+        throw error;
+    }
+}
+
+/**
+ * Split a platform coin into exact amount + remainder
+ */
+async function splitPlatformCoin(
+    coinId: string,
+    amountNeeded: number
+): Promise<string> {
+    const { getSuiClient } = await import('./sui.js');
+    
+    const client = getSuiClient();
+    const platformPrivateKey = process.env.SUI_PRIVATE_KEY;
+    
+    if (!platformPrivateKey) {
+        throw new Error('Platform private key not set');
+    }
+
+    const keypair = Ed25519Keypair.fromSecretKey(platformPrivateKey);
+    const tx = new Transaction();
+
+    // Split coin: [amount_needed] + [remainder]
+    tx.splitCoins(tx.object(coinId), [amountNeeded]);
+
+    const result = await client.signAndExecuteTransaction({
+        transaction: tx,
+        signer: keypair,
+        options: {
+            showEffects: true,
+            showObjectChanges: true
+        }
+    });
+
+    // Find the newly created coin object
+    const created = result.objectChanges?.find(
+        (change: any) => change.type === 'created' && change.objectType?.includes('Coin')
+    );
+
+    if (!created || !('objectId' in created)) {
+        throw new Error('Failed to split coin: no new coin object found');
+    }
+
+    return (created as any).objectId;
+}
+
+/**
+ * Merge multiple platform coins to get exact amount
+ */
+async function mergePlatformCoins(
+    coins: any[],
+    amountNeeded: number
+): Promise<string> {
+    const { getSuiClient } = await import('./sui.js');
+    
+    const client = getSuiClient();
+    const platformPrivateKey = process.env.SUI_PRIVATE_KEY || process.env.PLATFORM_PRIVATE_KEY;
+    
+    if (!platformPrivateKey) {
+        throw new Error('Platform private key not set');
+    }
+
+    // Sort coins by balance
+    const sortedCoins = coins.sort((a, b) => 
+        parseInt(b.balance) - parseInt(a.balance)
+    );
+
+    // Select coins until we have enough
+    const coinsToMerge: string[] = [];
+    let accumulatedBalance = 0;
+
+    for (const coin of sortedCoins) {
+        coinsToMerge.push(coin.coinObjectId);
+        accumulatedBalance += parseInt(coin.balance);
+        
+        if (accumulatedBalance >= amountNeeded) {
+            break;
+        }
+    }
+
+    if (coinsToMerge.length === 0) {
+        throw new Error('No coins to merge');
+    }
+
+    const keypair = Ed25519Keypair.fromSecretKey(platformPrivateKey);
+    const tx = new Transaction();
+
+    // Merge all coins into the first one
+    const [primaryCoin, ...mergeCoins] = coinsToMerge;
+    
+    if (mergeCoins.length > 0) {
+        tx.mergeCoins(
+            tx.object(primaryCoin),
+            mergeCoins.map(id => tx.object(id))
+        );
+    }
+
+    // If merged amount > needed, split it
+    if (accumulatedBalance > amountNeeded) {
+        const [exactCoin] = tx.splitCoins(tx.object(primaryCoin), [amountNeeded]);
+        tx.transferObjects([exactCoin], keypair.toSuiAddress());
+    }
+
+    const result = await client.signAndExecuteTransaction({
+        signer: keypair,
+        transaction: tx,
+        options: {
+            showEffects: true,
+            showObjectChanges: true
+        }
+    });
+
+    // Return the coin with exact amount
+    const created = result.objectChanges?.find(
+        (change: any) => change.type === 'created' && change.objectType?.includes('Coin')
+    );
+
+    if (created && 'objectId' in created) {
+        return (created as any).objectId;
+    }
+
+    // If no new coin created (merge only), return primary coin
+    return primaryCoin;
+}
+
+/**
  * Infer task type from job details
  */
 function inferTaskType(job: any): string {
-    // TODO: Implement logic to determine task type
-    // Could be based on job title, requirements, or explicit field
-
     const title = job.title?.toLowerCase() || '';
 
     if (title.includes('audit')) return 'code_audit';
@@ -277,3 +508,6 @@ export function getPollerStats(): {
         isCurrentlyPolling: isPolling
     };
 }
+
+// Export helper functions for external use
+export { getPlatformUsdcCoin };

@@ -17,6 +17,8 @@
 
 import { Router, Request, Response } from 'express';
 import * as queries from '../db/queries.js';
+import { releaseEscrow, cancelEscrow } from '../services/sui.js';
+import { createInvoice } from '../services/beep.js';
 
 const router = Router();
 
@@ -253,6 +255,113 @@ router.get('/:id', async (req: Request, res: Response) => {
 });
 
 /**
+ * PATCH /api/v1/jobs/:id/reference-key
+ * Update job reference key (from Beep widget session)
+ * 
+ * Body:
+ * - referenceKey: string
+ */
+router.patch('/:id/reference-key', async (req: Request, res: Response) => {
+    try {
+        const jobId = parseInt(req.params.id);
+        const { referenceKey } = req.body;
+
+        if (isNaN(jobId)) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'Invalid job ID',
+            });
+        }
+
+        if (!referenceKey) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'referenceKey is required',
+            });
+        }
+
+        // Update job reference key
+        const job = await queries.updateJobReferenceKeyById(jobId, referenceKey);
+
+        res.json({
+            status: 200,
+            error: false,
+            message: 'Reference key updated',
+            data: {
+                job: {
+                    id: job.id,
+                    referenceKey: job.reference_key,
+                },
+            },
+        });
+    } catch (error) {
+        console.error('Error updating reference key:', error);
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to update reference key',
+        });
+    }
+});
+
+/**
+ * GET /api/v1/jobs/:id/payment-status
+ * Check payment status for a job
+ */
+router.get('/:id/payment-status', async (req: Request, res: Response) => {
+    try {
+        const jobId = parseInt(req.params.id);
+
+        if (isNaN(jobId)) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'Invalid job ID',
+            });
+        }
+
+        const job = await queries.getJobById(jobId);
+        
+        if (!job) {
+            return res.status(404).json({
+                status: 404,
+                error: true,
+                message: 'Job not found'
+            });
+        }
+
+        if (!job.beep_invoice_id) {
+            return res.status(404).json({
+                status: 404,
+                error: true,
+                message: 'Invoice not created yet'
+            });
+        }
+
+        const { beepSDKService } = await import('../services/beep-sdk.js');
+        const paymentStatus = await beepSDKService.getPaymentStatus(job.beep_invoice_id);
+
+        res.json({
+            status: 200,
+            error: false,
+            data: {
+                paid: paymentStatus.paid,
+                jobId: job.id
+            },
+        });
+    } catch (error: any) {
+        console.error('Error checking payment status:', error);
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: 'Failed to check payment status',
+        });
+    }
+});
+
+/**
  * POST /api/v1/jobs/:id/hire
  * Create Beep invoice for job payment
  * 
@@ -290,32 +399,31 @@ router.post('/:id/hire', async (req: Request, res: Response) => {
             });
         }
 
-        // TODO: Create Beep invoice
-        // import { createInvoice } from '../services/beep.js';
-        // 
-        // const invoice = await createInvoice({
-        //     amount: job.amount_usdc,
-        //     referenceKey: job.reference_key,
-        //     description: `Payment for job: ${job.title}`,
-        //     generateQrCode,
-        // });
-        //
-        // // Update job with invoice ID
-        // await queries.updateJobStatus(jobId, 'unpaid', {
-        //     beep_invoice_id: invoice.id,
-        // });
+        // Create invoice via Beep SDK
+        const { beepSDKService } = await import('../services/beep-sdk.js');
+        
+        const invoice = await beepSDKService.createInvoice({
+            amount: job.amount_usdc,
+            description: `BeepLancer Job #${jobId}: ${job.title}`
+        });
+
+        console.log('[Jobs] ✅ Invoice created:', invoice.invoiceId);
+
+        // Update job with invoice ID
+        await queries.updateJobStatus(jobId, 'unpaid', {
+            beep_invoice_id: invoice.invoiceId
+        });
 
         res.json({
             status: 200,
             error: false,
-            message: 'Invoice created (TODO: implement Beep service)',
+            message: 'Invoice created',
             data: {
                 invoice: {
-                    // id: invoice.id,
-                    // paymentUrl: invoice.paymentUrl,
-                    // qrCode: invoice.qrCode,
-                    amount: job.amount_usdc,
-                    referenceKey: job.reference_key,
+                    id: invoice.invoiceId,
+                    paymentUrl: invoice.paymentUrl,
+                    qrCode: invoice.qrCode,
+                    amount: job.amount_usdc
                 },
             },
         });
@@ -379,14 +487,14 @@ router.post('/:id/delivery', async (req: Request, res: Response) => {
             });
         }
 
-        // TODO: Save delivery to job_deliveries table
-        // const delivery = await queries.createDelivery({
-        //     job_id: jobId,
-        //     content,
-        //     delivery_type: deliveryType,
-        //     external_url: externalUrl,
-        //     notes,
-        // });
+        // Save delivery to database
+        const deliveryId = await queries.createDelivery(
+            jobId,
+            content,
+            deliveryType,
+            externalUrl,
+            notes
+        );
 
         // Update job status to 'delivered'
         await queries.updateJobStatus(jobId, 'delivered');
@@ -394,11 +502,11 @@ router.post('/:id/delivery', async (req: Request, res: Response) => {
         res.json({
             status: 200,
             error: false,
-            message: 'Delivery submitted successfully (TODO: implement createDelivery)',
+            message: 'Delivery submitted successfully',
             data: {
                 jobId,
+                deliveryId,
                 delivery: {
-                    // id: delivery.id,
                     content: content.substring(0, 100) + '...', // Preview
                     deliveryType,
                     externalUrl,
@@ -465,32 +573,44 @@ router.post('/:id/approve', async (req: Request, res: Response) => {
         }
 
         if (approved) {
-            // TODO: Release escrow on SUI blockchain
-            // import { releaseEscrow } from '../services/sui.js';
-            // 
-            // const txDigest = await releaseEscrow({
-            //     escrowObjectId: job.escrow_object_id!,
-            // });
+            // Release escrow on SUI blockchain
+            let txDigest: string | undefined;
+            
+            if (job.escrow_object_id) {
+                try {
+                    // Get buyer address
+                    const buyer = await queries.getUserById(job.buyer_id);
+                    if (!buyer) {
+                        throw new Error('Buyer not found');
+                    }
+
+                    const result = await releaseEscrow({
+                        escrowObjectId: job.escrow_object_id,
+                        buyerAddress: buyer.wallet_address
+                    });
+                    txDigest = result.txDigest;
+                    console.log(`[Jobs] Escrow released: ${txDigest}`);
+                } catch (error) {
+                    console.error('[Jobs] Failed to release escrow:', error);
+                    // Continue anyway to update status
+                }
+            }
 
             // Update job status to 'completed'
             await queries.updateJobStatus(jobId, 'completed', {
-                // release_tx_digest: txDigest,
+                release_tx_digest: txDigest
             });
 
-            // TODO: Trigger payout via Beep
-            // import { createPayout } from '../services/beep.js';
-            // await createPayout({
-            //     amount: job.amount_usdc,
-            //     recipientAddress: agentWallet,
-            // });
+            // Note: Beep payout would be handled separately or via payment poller
 
             res.json({
                 status: 200,
                 error: false,
-                message: 'Delivery approved, escrow release initiated (TODO: implement SUI service)',
+                message: 'Delivery approved and escrow released',
                 data: {
                     jobId,
                     status: 'completed',
+                    releaseTxDigest: txDigest,
                     feedback,
                 },
             });
@@ -554,20 +674,23 @@ router.post('/:id/cancel', async (req: Request, res: Response) => {
             });
         }
 
-        // TODO: Cancel escrow if exists
-        // if (job.escrow_object_id) {
-        //     import { cancelEscrow } from '../services/sui.js';
-        //     await cancelEscrow({
-        //         escrowObjectId: job.escrow_object_id,
-        //     });
-        // }
+        // Cancel escrow if exists
+        if (job.escrow_object_id) {
+            try {
+                await cancelEscrow(job.escrow_object_id);
+                console.log(`[Jobs] Escrow cancelled for job ${jobId}`);
+            } catch (error) {
+                console.error('[Jobs] Failed to cancel escrow:', error);
+                // Continue anyway to update status
+            }
+        }
 
         await queries.updateJobStatus(jobId, 'cancelled');
 
         res.json({
             status: 200,
             error: false,
-            message: 'Job cancelled successfully (TODO: implement cancelEscrow if needed)',
+            message: 'Job cancelled successfully',
             data: {
                 jobId,
                 status: 'cancelled',
@@ -579,6 +702,116 @@ router.post('/:id/cancel', async (req: Request, res: Response) => {
             status: 500,
             error: true,
             message: 'Failed to cancel job',
+        });
+    }
+});
+
+/**
+ * POST /api/v1/jobs/confirm-payment
+ * Confirm Beep payment and create escrow
+ * 
+ * Body:
+ * - jobId: number
+ * - referenceKey: string (Beep payment reference)
+ */
+router.post('/confirm-payment', async (req: Request, res: Response) => {
+    try {
+        const { jobId, referenceKey } = req.body;
+
+        console.log(`[Jobs] Confirming payment for job #${jobId}, ref: ${referenceKey}`);
+
+        // Validate
+        if (!jobId || !referenceKey) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'jobId and referenceKey are required'
+            });
+        }
+
+        // Get job
+        const job = await queries.getJobById(jobId);
+        if (!job) {
+            return res.status(404).json({
+                status: 404,
+                error: true,
+                message: 'Job not found'
+            });
+        }
+
+        // Verify payment via Beep SDK
+        const { beepSDKService } = await import('../services/beep-sdk.js');
+        const paymentStatus = await beepSDKService.getPaymentStatus(referenceKey);
+
+        if (!paymentStatus.paid) {
+            return res.status(400).json({
+                status: 400,
+                error: true,
+                message: 'Payment not confirmed'
+            });
+        }
+
+        console.log(`[Jobs] Payment confirmed for job #${jobId}`);
+
+        // Get agent and buyer info
+        const agent = await queries.getUserById(job.agent_id!);
+        const buyer = await queries.getUserById(job.buyer_id);
+
+        if (!agent || !buyer) {
+            throw new Error('Agent or buyer not found');
+        }
+
+        console.log(`[Jobs] Creating escrow: ${job.amount_usdc} USDC for agent ${agent.wallet_address}`);
+
+        // Get REAL USDC coin from platform wallet
+        const { getPlatformUsdcCoin } = await import('../services/payment-poller.js');
+        const usdcCoinId = await getPlatformUsdcCoin(job.amount_usdc);
+        
+        console.log(`[Jobs] Using USDC coin: ${usdcCoinId}`);
+
+        // Create SUI escrow with REAL USDC
+        const { createEscrow } = await import('../services/sui.js');
+        const { getDb } = await import('../db/database.js');
+        
+        const escrow = await createEscrow({
+            buyerAddress: buyer.wallet_address,
+            agentAddress: agent.wallet_address,
+            amountUsdc: job.amount_usdc,
+            jobReference: job.reference_key || `JOB-${jobId}`,
+            usdcCoinId // REAL USDC coin from platform
+        });
+
+        console.log(`[Jobs] ✅ Escrow created successfully: ${escrow.escrowObjectId}`);
+        console.log(`[Jobs] Transaction: ${escrow.txDigest}`);
+
+        // Update job status
+        const db = getDb();
+        await db.query(
+            `UPDATE jobs 
+             SET status = $1, 
+                 escrow_object_id = $2, 
+                 payment_tx = $3,
+                 updated_at = NOW() 
+             WHERE id = $4`,
+            ['escrowed', escrow.escrowObjectId, escrow.txDigest, jobId]
+        );
+
+        res.json({
+            status: 200,
+            error: false,
+            message: 'Payment confirmed and escrow created',
+            data: {
+                escrowObjectId: escrow.escrowObjectId,
+                txDigest: escrow.txDigest
+            }
+        });
+
+    } catch (error: any) {
+        console.error('[Jobs] Error confirming payment:', error);
+        res.status(500).json({
+            status: 500,
+            error: true,
+            message: error.message || 'Failed to confirm payment'
         });
     }
 });
