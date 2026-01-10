@@ -341,14 +341,46 @@ router.get('/:id/payment-status', async (req: Request, res: Response) => {
         }
 
         const { beepSDKService } = await import('../services/beep-sdk.js');
-        const paymentStatus = await beepSDKService.getPaymentStatus(job.beep_invoice_id);
+        const { verifyPaymentOnChain } = await import('../services/sui.js');
+        
+        // 1. Check official Beep status
+        let isPaid = false;
+        let paymentStatus: any = { paid: false };
+        
+        try {
+            paymentStatus = await beepSDKService.getPaymentStatus(job.beep_invoice_id);
+            if (paymentStatus.paid) {
+                isPaid = true;
+                console.log(`[Jobs] Beep status for job ${jobId}: PAID`);
+            }
+        } catch (e) {
+            console.warn(`[Jobs] Beep status check failed for job ${jobId}`);
+        }
+
+        // 2. Fallback: Check on-chain if not paid via Beep API
+        if (!isPaid) {
+             const merchantAddress = process.env.BEEP_MERCHANT_SUI_ADDRESS;
+             if (merchantAddress) {
+                 const onChainResult = await verifyPaymentOnChain(
+                     merchantAddress,
+                     job.amount_usdc,
+                     job.beep_invoice_id
+                 );
+
+                 if (onChainResult.paid) {
+                     isPaid = true;
+                     console.log(`[Jobs] On-chain check for job ${jobId}: PAID (tx: ${onChainResult.txDigest})`);
+                 }
+             }
+        }
 
         res.json({
             status: 200,
             error: false,
             data: {
-                paid: paymentStatus.paid,
-                jobId: job.id
+                paid: isPaid,
+                jobId: job.id,
+                method: isPaid ? 'on-chain-or-beep' : 'pending'
             },
         });
     } catch (error: any) {
@@ -813,6 +845,42 @@ router.post('/confirm-payment', async (req: Request, res: Response) => {
             error: true,
             message: error.message || 'Failed to confirm payment'
         });
+    }
+});
+
+
+/**
+ * @route POST /api/v1/jobs/:id/simulate-payment
+ * @desc TEST ONLY: Simulate successful payment
+ */
+router.post('/:id/simulate-payment', async (req, res) => {
+    try {
+        const jobId = parseInt(req.params.id);
+        console.log(`[Jobs] 🛠️ Simulating payment for job ${jobId}...`);
+
+        const job = await queries.getJobById(jobId);
+        if (!job) {
+            return res.status(404).json({ error: true, message: 'Job not found' });
+        }
+
+        // Manually trigger the PaymentPoller logic
+        const { processPayment } = await import('../services/payment-poller.js');
+        
+        // Force process payment
+        await processPayment(job);
+
+        res.json({
+            status: 200,
+            error: false,
+            message: 'Payment simulated and escrow triggered',
+            data: {
+                jobId,
+                status: 'paid'
+            }
+        });
+    } catch (error: any) {
+        console.error('[Jobs] Simulation failed:', error);
+        res.status(500).json({ status: 500, error: true, message: error.message });
     }
 });
 

@@ -154,6 +154,11 @@ async function startServer(): Promise<void> {
         await initializeSuiClient();
         console.log('✅ SUI client initialized');
 
+        // Step 5: Start AI Agent Poller
+        const { startAgentPolling } = await import('./services/agent-poller.js');
+        startAgentPolling();
+        console.log('✅ AI Agent poller started');
+
         // Step 5: Start the Express server
         app.listen(PORT, () => {
             console.log('='.repeat(60));

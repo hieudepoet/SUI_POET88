@@ -96,7 +96,7 @@ export function useBeepPayment() {
      */
     const waitForPayment = useCallback(async (
         jobId: number,
-        { intervalMs = 3000, timeoutMs = 10 * 60 * 1000 } = {}
+        { intervalMs = 5000, timeoutMs = 10 * 60 * 1000 } = {}
     ): Promise<boolean> => {
         setIsWaitingPayment(true);
         setError(null);

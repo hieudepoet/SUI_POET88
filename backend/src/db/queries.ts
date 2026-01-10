@@ -481,7 +481,8 @@ export async function getUnpaidJobsWithInvoices(): Promise<Job[]> {
             `SELECT * FROM jobs
              WHERE status = 'unpaid'
              AND beep_invoice_id IS NOT NULL
-             ORDER BY created_at ASC`
+             ORDER BY created_at DESC
+             LIMIT 10`
         );
         return result.rows;
     } catch (err) {

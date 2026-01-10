@@ -1,11 +1,10 @@
 /**
- * Beep SDK Service - Payment Integration
+ * Beep SDK Service - SUI Pay Deep Link Flow
  * 
- * Uses Beep's Payment Request flow (not Invoice flow!) for creating payment URLs
+ * Uses SUI Pay protocol for Slush wallet payments
  */
 
 import { BeepClient, SupportedToken } from '@beep-it/sdk-core';
-import axios from 'axios';
 import QRCode from 'qrcode';
 
 // Initialize Beep client
@@ -18,31 +17,78 @@ if (!process.env.BEEP_API_KEY) {
 }
 
 /**
- * Get Merchant ID from Beep SDK
+ * Helper: Get UUID from numeric invoice ID (with retry)
  */
-export async function getMerchantId(): Promise<string> {
+export async function getInvoiceUuid(invoiceId: string | number): Promise<string> {
+    console.log('[BeepSDK] Mapping ID to UUID:', invoiceId);
+    
+    // Try 1: Direct getInvoice with numeric ID (some APIs accept both)
     try {
-        console.log('[BeepSDK] Fetching merchant ID...');
-        
-        const user = await beepClient.user.getCurrentUser();
-        
-        if (!user.merchantId) {
-            throw new Error('Merchant ID not found in user response');
+        console.log('[BeepSDK] Trying direct getInvoice with numeric ID...');
+        const invoice = await beepClient.invoices.getInvoice(invoiceId.toString());
+        const uuid = (invoice as any).uuid;
+        if (uuid) {
+            console.log('[BeepSDK] ✅ Got UUID from direct call:', uuid);
+            return uuid;
         }
-        
-        console.log('[BeepSDK] ✅ Merchant ID:', user.merchantId);
-        return user.merchantId;
-        
-    } catch (error: any) {
-        console.error('[BeepSDK] ❌ Error fetching merchant ID:', error.message);
-        throw error;
+    } catch (e) {
+        console.log('[BeepSDK] Direct call failed, falling back to listInvoices...');
     }
+    
+    // Try 2: List invoices and find by ID (with retry for newly created invoices)
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            const invoices = await beepClient.invoices.listInvoices();
+            console.log(`[BeepSDK] Attempt ${attempt}: Fetched ${invoices.length} invoices`);
+            
+            const invoice = invoices.find((inv: any) => 
+                inv.id?.toString() === invoiceId.toString()
+            );
+            
+            if (invoice) {
+                const uuid = (invoice as any).uuid;
+                if (!uuid) {
+                    throw new Error(`Invoice ${invoiceId} missing UUID`);
+                }
+                
+                console.log('[BeepSDK] ✅ Found UUID:', uuid);
+                return uuid;
+            }
+            
+            // Not found yet, wait before retry
+            if (attempt < 3) {
+                console.log(`[BeepSDK] Invoice ${invoiceId} not found yet, waiting 1s...`);
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        } catch (error) {
+            console.error(`[BeepSDK] Error on attempt ${attempt}:`, error);
+            if (attempt === 3) throw error;
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+    }
+    
+    throw new Error(`Invoice ${invoiceId} not found after 3 attempts`);
 }
 
 /**
- * Create payment request (CORRECT FLOW)
+ * Get Merchant ID
+ */
+export async function getMerchantId(): Promise<string> {
+    const user = await beepClient.user.getCurrentUser();
+    if (!user.merchantId) {
+        throw new Error('Merchant ID not found');
+    }
+    return user.merchantId;
+}
+
+/**
+ * Create Invoice with SUI Pay URL
  * 
- * Uses requestAndPurchaseAsset with ephemeral items to get paymentUrl & QR code
+ * 1. Create invoice
+ * 2. Get UUID
+ * 3. Get merchant SUI address
+ * 4. Construct sui:pay URL
+ * 5. Generate QR
  */
 export async function createInvoice(params: {
     amount: number;
@@ -52,122 +98,154 @@ export async function createInvoice(params: {
     paymentUrl: string;
     qrCode?: string;
 }> {
-    console.log('[BeepSDK] Creating payment request:', params.description);
+    console.log('[BeepSDK] Creating invoice:', params.description, 'Amount:', params.amount);
 
-    // Format amount to 2 decimal places as string
-    const formattedAmount = Number(params.amount).toFixed(2);
-
-    // Use requestAndPurchaseAsset with ephemeral asset
-    const paymentData = await beepClient.payments.requestAndPurchaseAsset({
-        assets: [{
-            name: params.description,
-            price: formattedAmount,
-            quantity: 1,
-            token: SupportedToken.USDC
-        }],
-        paymentLabel: 'BeepLancer',
-        generateQrCode: true
+    // 1. Create invoice
+    const invoice = await beepClient.invoices.createInvoice({
+        amount: Number(params.amount).toFixed(2),
+        token: SupportedToken.USDC,
+        description: params.description,
+        payerType: 'customer_wallet' as const
     });
 
-    if (!paymentData || !paymentData.referenceKey) {
-        throw new Error('Failed to create payment request');
+    console.log('[BeepSDK] ✅ Invoice created - Response:', JSON.stringify(invoice, null, 2));
+
+    // 2. Get UUID - try to extract from response first!
+    const invoiceAny = invoice as any;
+    let uuid = invoiceAny.uuid;
+    
+    if (!uuid) {
+        // Fallback: map via listInvoices (slower)
+        console.warn('[BeepSDK] UUID not in response, mapping via listInvoices...');
+        uuid = await getInvoiceUuid(invoice.id!);
+    } else {
+        console.log('[BeepSDK] ✅ UUID from response:', uuid);
     }
 
-    console.log('[BeepSDK] ✅ Payment request created');
-    console.log('[BeepSDK] 🔑 Reference Key:', paymentData.referenceKey);
-    console.log('[BeepSDK] 💳 Payment URL:', paymentData.paymentUrl);
-    console.log('[BeepSDK] 📱 QR Code:', paymentData.qrCode ? 'Available' : 'Generated manually');
+    // CHECK FOR OFFICIAL PAYMENT URL
+    let paymentUrl = invoiceAny.url || invoiceAny.paymentUrl || invoiceAny.payment_url;
 
-    // Generate QR code from URL if not provided
-    let qrCodeDataUrl = paymentData.qrCode;
-    if (!qrCodeDataUrl && paymentData.paymentUrl) {
-        try {
-            qrCodeDataUrl = await QRCode.toDataURL(paymentData.paymentUrl, {
-                errorCorrectionLevel: 'H',
-                margin: 1,
-                width: 300
-            });
-            console.log('[BeepSDK] ✅ QR code generated from URL');
-        } catch (qrError) {
-            console.error('[BeepSDK] ⚠️ Failed to generate QR code:', qrError);
+    if (paymentUrl) {
+         console.log('[BeepSDK] ✅ Found OFFICIAL Beep Payment URL:', paymentUrl);
+    } else {
+        console.log('[BeepSDK] ⚠️ No official URL found, generating SUI Pay Deep Link...');
+
+        // 3. Get merchant's SUI address for payment
+        // NOTE: Invoice doesn't contain SUI address, only merchantId UUID
+        // We need to get it from env variable or user API
+        let merchantAddress = process.env.BEEP_MERCHANT_SUI_ADDRESS;
+        
+        if (!merchantAddress) {
+            console.warn('[BeepSDK] ⚠️ BEEP_MERCHANT_SUI_ADDRESS not set in env');
+            
+            // Try to get from user API (if available)
+            try {
+                const user = await beepClient.user.getCurrentUser() as any;
+                merchantAddress = user.suiAddress || user.sui_address || user.walletAddress || user.wallet_address;
+                
+                if (merchantAddress) {
+                    console.log('[BeepSDK] ✅ Got merchant address from user API:', merchantAddress);
+                }
+            } catch (e) {
+                console.error('[BeepSDK] Failed to get merchant address from user API:', e);
+            }
+        } else {
+            console.log('[BeepSDK] ✅ Using merchant address from env');
         }
+
+        if (!merchantAddress) {
+            throw new Error(
+                'Merchant SUI address not found. Please set BEEP_MERCHANT_SUI_ADDRESS in .env file. ' +
+                'Get your merchant address from Beep dashboard.'
+            );
+        }
+
+        console.log('[BeepSDK] Merchant SUI address:', merchantAddress);
+
+        // 4. Construct SUI Pay deep link
+        // Format: sui:pay?receiver=<ADDRESS>&amount=<AMOUNT>&coinType=<TYPE>&memo=<UUID>
+        // Note: 'nonce' is sometimes used, but 'memo' is clearer for wallets
+        const amountInSmallestUnits = Math.floor(params.amount * 1_000_000); // USDC has 6 decimals
+        
+        // Get Coin Type from env or default to Mainnet Wormhole USDC
+        const USDC_COIN_TYPE = process.env.BEEP_USDC_COIN_TYPE || '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC';
+        const REGISTRY = 'default-payment-registry';
+        
+        console.log('[BeepSDK] 💰 Using Coin Type:', USDC_COIN_TYPE);
+        console.log('[BeepSDK] 📝 Memo/Nonce:', uuid);
+
+        // Add memo (UUID) so Beep often uses this to match payments
+        paymentUrl = `sui:pay?receiver=${merchantAddress}&amount=${amountInSmallestUnits}&coinType=${encodeURIComponent(USDC_COIN_TYPE)}&memo=${uuid}&nonce=${uuid}&registry=${REGISTRY}`;
+        
+        console.log('[BeepSDK] ✅ Generated SUI Pay URL:', paymentUrl);
+    }
+
+    // 5. Generate QR code
+    let qrCode: string | undefined;
+    try {
+        qrCode = await QRCode.toDataURL(paymentUrl, {
+            errorCorrectionLevel: 'H',
+            margin: 1,
+            width: 300
+        });
+        console.log('[BeepSDK] ✅ QR code generated');
+    } catch (qrError) {
+        console.error('[BeepSDK] ⚠️ QR generation failed:', qrError);
     }
 
     return {
-        invoiceId: paymentData.referenceKey,
-        paymentUrl: paymentData.paymentUrl!,
-        qrCode: qrCodeDataUrl
+        invoiceId: uuid,
+        paymentUrl,
+        qrCode
     };
 }
 
 /**
- * Check payment status using reference key
+ * Check Payment Status
  */
-export async function getPaymentStatus(referenceKey: string): Promise<{ paid: boolean; status?: string }> {
-    console.log('[BeepSDK] Checking payment status for reference:', referenceKey);
+export async function getPaymentStatus(invoiceId: string): Promise<{ paid: boolean; status?: string }> {
+    console.log('[BeepSDK] Checking status for:', invoiceId);
 
     try {
-        // Poll payment status via requestAndPurchaseAsset
-        const status = await beepClient.payments.requestAndPurchaseAsset({
-            paymentReference: referenceKey,
-            generateQrCode: false
-        });
+        const uuid = await getInvoiceUuid(invoiceId);
         
-        // Payment is complete when referenceKey is NOT returned
-        const paid = !status?.referenceKey;
-
-        console.log('[BeepSDK] Payment status:', status?.status, '→ paid:', paid);
-
-        return { 
-            paid,
-            status: status?.status as string
-        };
+        const invoice = await beepClient.invoices.getInvoice(uuid);
+        const paid = invoice.status === 'paid';
+        
+        console.log('[BeepSDK] Status:', invoice.status, '→ Paid:', paid);
+        
+        return { paid, status: invoice.status };
     } catch (error: any) {
-        console.error('[BeepSDK] ❌ Error checking payment status:', error.message);
-        
-        // Return unpaid on error to avoid false positives
-        return {
-            paid: false,
-            status: 'error'
-        };
+        console.error('[BeepSDK] ❌ Status check failed:', error.message);
+        return { paid: false, status: 'error' };
     }
 }
 
 /**
- * Issue payment for an invoice programmatically (for autonomous agents)
+ * Issue Payment (for autonomous agents)
  */
 export async function issuePayment(params: {
     invoiceUuid: string;
     payingMerchantId: string;
     assetChunks?: any[];
 }): Promise<{ success: boolean; data?: any; error?: string }> {
-    console.log('[BeepSDK] Issuing payment for invoice:', params.invoiceUuid);
-
     try {
         const response = await beepClient.payments.issuePayment({
             invoiceId: params.invoiceUuid,
             payingMerchantId: params.payingMerchantId,
             assetChunks: params.assetChunks || []
         });
-
-        console.log('[BeepSDK] ✅ Payment issued successfully');
-        return {
-            success: true,
-            data: response
-        };
+        return { success: true, data: response };
     } catch (error: any) {
-        console.error('[BeepSDK] ❌ Error issuing payment:', error.message);
-        return {
-            success: false,
-            error: error.message
-        };
+        return { success: false, error: error.message };
     }
 }
 
-// Export singleton service
+// Export service
 export const beepSDKService = {
     createInvoice,
     getPaymentStatus,
     issuePayment,
-    getMerchantId
+    getMerchantId,
+    getInvoiceUuid
 };

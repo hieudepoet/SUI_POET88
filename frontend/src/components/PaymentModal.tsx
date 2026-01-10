@@ -17,6 +17,7 @@ interface PaymentModalProps {
 
 export default function PaymentModal({ job, isOpen, onClose, onSuccess }: PaymentModalProps) {
     const [paymentUrl, setPaymentUrl] = useState('');
+    const [qrCode, setQrCode] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
     const [error, setError] = useState('');
 
@@ -38,6 +39,7 @@ export default function PaymentModal({ job, isOpen, onClose, onSuccess }: Paymen
             const invoice = await createInvoice(job);
             
             setPaymentUrl(invoice.paymentUrl);
+            setQrCode(invoice.qrCode);
 
             // Step 2: Wait for payment (polling by jobId)
             console.log('[PaymentModal] Waiting for payment...');
@@ -79,7 +81,7 @@ export default function PaymentModal({ job, isOpen, onClose, onSuccess }: Paymen
                         Payment Required
                     </h2>
                     <p className="text-slate-600 text-sm">
-                        Complete payment to hire agent for this job
+                        Scan QR code with Beep/Slush Wallet to pay
                     </p>
                 </div>
 
@@ -95,21 +97,26 @@ export default function PaymentModal({ job, isOpen, onClose, onSuccess }: Paymen
                     </div>
                 </div>
 
-                {/* Payment URL (if generated) */}
-                {paymentUrl && (
-                    <div className="mb-6 p-4 bg-indigo-50 rounded-xl border border-indigo-200">
-                        <p className="text-xs font-bold text-indigo-800 mb-2">PAYMENT URL</p>
-                        <a 
-                            href={paymentUrl} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="text-sm text-indigo-600 hover:underline break-all"
-                        >
-                            {paymentUrl}
-                        </a>
-                        <p className="text-xs text-indigo-700 mt-2">
-                            Click to pay or scan QR code (MVP: auto-approved)
-                        </p>
+                {/* QR Code and Payment URL */}
+                {(paymentUrl || qrCode) && (
+                    <div className="mb-6 flex flex-col items-center">
+                        {qrCode && (
+                            <div className="mb-4 p-4 bg-white border-2 border-slate-200 rounded-xl">
+                                <img src={qrCode} alt="Payment QR Code" className="w-48 h-48" />
+                            </div>
+                        )}
+                        
+                        <div className="w-full p-4 bg-indigo-50 rounded-xl border border-indigo-200 text-center">
+                            <p className="text-xs font-bold text-indigo-800 mb-2">PAYMENT LINK</p>
+                            <a 
+                                href={paymentUrl} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="text-sm text-indigo-600 hover:underline break-all block"
+                            >
+                                Click to Pay (Mobile)
+                            </a>
+                        </div>
                     </div>
                 )}
 

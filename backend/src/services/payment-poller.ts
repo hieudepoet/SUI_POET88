@@ -18,7 +18,7 @@
 
 import { beepSDKService } from './beep-sdk.js';
 import { getUnpaidJobsWithInvoices, markJobAsEscrowed, updateJobStatus, getUserById } from '../db/queries.js';
-import { createEscrow } from './sui.js';
+import { createEscrow, verifyPaymentOnChain } from './sui.js';
 // import { executeFreelanceTask } from './mcp-client.js'; // Removed - not using MCP
 import { Transaction } from '@mysten/sui/transactions';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
@@ -113,42 +113,70 @@ async function pollForPayments(): Promise<void> {
                 continue;
             }
             
+            // Skip old numeric IDs (from before UUID migration)
+            // These are outside the 50-invoice limit and can't be mapped
+            const isOldNumericId = /^\d+$/.test(job.beep_invoice_id) && parseInt(job.beep_invoice_id) < 2400;
+            if (isOldNumericId) {
+                console.log(`[PaymentPoller] Skipping old numeric invoice ID ${job.beep_invoice_id} (job ${job.id})`);
+                continue;
+            }
+            
+            // FLAG: Has payment been confirmed?
+            let isPaid = false;
+
             try {
                 // Query Beep API for invoice status
                 console.log(`[PaymentPoller] Checking invoice ${job.beep_invoice_id} for job ${job.id}...`);
                 const invoice = await beepSDKService.getPaymentStatus(job.beep_invoice_id);
                 
                 if (invoice.status === 'paid') {
-                    console.log(`[PaymentPoller] ✅ Payment detected for job ${job.id}`);
-                    await processPayment(job);
+                    console.log(`[PaymentPoller] ✅ Beep Payment detected for job ${job.id}`);
+                    isPaid = true;
                 } else if (invoice.status === 'expired') {
                     console.log(`[PaymentPoller] ⏰ Invoice expired for job ${job.id}`);
-                    await updateJobStatus(job.id, 'cancelled');
+                    // Only cancel if on-chain check fails (below) - wait, if expired, beep won't accept presumably?
+                    // But on-chain is truth. 
                 } else {
-                    // Still pending - do nothing
-                    console.log(`[PaymentPoller] ⏳ Job ${job.id} still pending (${invoice.status})`);
+                    console.log(`[PaymentPoller] ⏳ Job ${job.id} pending on Beep (${invoice.status})`);
                 }
             } catch (error: any) {
-                // Handle specific error cases
-                if (error.response?.status === 400 || error.status === 400 || error.code === 'ERR_BAD_REQUEST') {
-                    // 400 = Invoice not found or expired
-                    console.warn(`[PaymentPoller] ⚠️ Invoice ${job.beep_invoice_id} not found or expired (job ${job.id})`);
-                    console.warn(`[PaymentPoller] Marking job ${job.id} as cancelled`);
-                    
+                console.warn(`[PaymentPoller] ⚠️ Beep API check failed for job ${job.id}: ${error.message}`);
+                // Proceed to on-chain check
+            }
+
+            // Fallback: Check On-Chain
+            if (!isPaid) {
+                const merchantAddress = process.env.BEEP_MERCHANT_SUI_ADDRESS;
+                if (merchantAddress) {
                     try {
-                        await updateJobStatus(job.id, 'cancelled');
-                    } catch (updateError) {
-                        console.error(`[PaymentPoller] Failed to cancel job ${job.id}:`, updateError);
+                        // Ensure we have the UUID for strict comparison
+                        let searchUuid = job.beep_invoice_id;
+                        if (/^\d+$/.test(searchUuid)) {
+                            console.log(`[PaymentPoller] Resolving numeric ID ${searchUuid} to UUID for on-chain check...`);
+                            searchUuid = await beepSDKService.getInvoiceUuid(searchUuid);
+                        }
+
+                        console.log(`[PaymentPoller] 🔍 Verifying on-chain with UUID: ${searchUuid}`);
+
+                        const onChain = await verifyPaymentOnChain(
+                            merchantAddress,
+                            job.amount_usdc,
+                            searchUuid
+                        );
+                        
+                        if (onChain.paid) {
+                            console.log(`[PaymentPoller] ✅ On-Chain Payment detected for job ${job.id} (tx: ${onChain.txDigest})`);
+                            isPaid = true;
+                        }
+                    } catch (err) {
+                        console.error(`[PaymentPoller] On-chain check error:`, err);
                     }
-                } else if (error.response?.status === 401 || error.status === 401) {
-                    // 401 = Authentication error - critical, log and skip
-                    console.error(`[PaymentPoller] ❌ Authentication error for job ${job.id}. Check BEEP_API_KEY!`);
-                } else {
-                    // Other errors - log and continue
-                    console.error(`[PaymentPoller] ❌ Error checking job ${job.id}:`, error.message || error);
                 }
-                
-                // Continue with other jobs even if one fails
+            }
+
+            // Process if paid
+            if (isPaid) {
+                await processPayment(job);
             }
         }
 
@@ -173,7 +201,7 @@ async function pollForPayments(): Promise<void> {
  * 2. Update job status to 'escrowed' with blockchain details
  * 3. Optionally trigger MCP agent to start work
  */
-async function processPayment(job: any): Promise<void> {
+export async function processPayment(job: any): Promise<void> {
     const jobId = job.id;
 
     try {

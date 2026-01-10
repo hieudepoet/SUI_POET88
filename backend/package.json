@@ -9,7 +9,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "db:init": "psql -h localhost -U postgres -d beeplancer -f scripts/init.sql",
-    "test": "npx tsx test-pool.ts"
+    "test": "npx tsx test-pool.ts",
+    "cleanup-invoices": "npx tsx src/cleanup-beep-invoices.ts"
   },
   "dependencies": {
     "@beep-it/sdk-core": "^0.1.7",

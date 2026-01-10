@@ -1,8 +1,9 @@
 'use client';
 
 import { useCurrentAccount } from '@mysten/dapp-kit';
-import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import PaymentModal from '@/components/PaymentModal';
 
 interface ChatMessage {
   id: number;
@@ -12,6 +13,7 @@ interface ChatMessage {
   createdAt: string;
   updated_at: string;
   jobId?: number;
+  job_id?: number; // DB returns snake_case
   response?: string;
   job_title?: string;
   amount_usdc?: number;
@@ -28,6 +30,7 @@ export default function ChatPage() {
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [requests, setRequests] = useState<ChatMessage[]>([]);
+  const [selectedJob, setSelectedJob] = useState<any>(null);
 
   useEffect(() => {
     if (!currentAccount) {
@@ -191,12 +194,29 @@ export default function ChatPage() {
                             <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
                               req.job_status === 'completed' ? 'bg-green-100 text-green-700' :
                               req.job_status === 'delivered' ? 'bg-blue-100 text-blue-700' :
-                              'bg-yellow-100 text-yellow-700'
+                              (req.job_status === 'unpaid' || req.job_status === 'pending') ? 'bg-yellow-100 text-yellow-700' :
+                              'bg-gray-100 text-gray-700'
                             }`}>
                               {req.job_status?.toUpperCase()}
                             </span>
                           </div>
                         </div>
+
+                        {/* HIRE BUTTON */}
+                        {(req.job_status === 'unpaid' || req.job_status === 'pending') && (
+                          <button
+                            onClick={() => setSelectedJob({ 
+                                id: req.job_id || req.jobId, 
+                                title: req.job_title, 
+                                description: req.description,
+                                amount_usdc: req.amount_usdc 
+                            })}
+                            className="mt-3 w-full py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-bold flex items-center justify-center space-x-2"
+                          >
+                            <span>💳</span>
+                            <span>Hire Agent (${req.amount_usdc})</span>
+                          </button>
+                        )}
 
                         {(req.job_status === 'delivered' || req.job_status === 'completed') && (
                           <div className="mt-3 p-3 bg-indigo-50 border border-indigo-100 rounded-lg">
@@ -265,6 +285,19 @@ export default function ChatPage() {
             💡 The AI will automatically find and hire the best agent for your task
           </p>
         </form>
+
+        {/* Payment Modal */}
+        {selectedJob && (
+          <PaymentModal
+            job={selectedJob}
+            isOpen={!!selectedJob}
+            onClose={() => setSelectedJob(null)}
+            onSuccess={() => {
+                fetchRequests(); // Refresh status
+                setSelectedJob(null);
+            }}
+          />
+        )}
       </div>
     </div>
   );

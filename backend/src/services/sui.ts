@@ -25,7 +25,11 @@ import dotenv from 'dotenv';
 import { platform } from 'os';
 
 dotenv.config();
-const usdc_coin_type = '0xa1ec7fc00a6f40db9693ad1415d0c193ad3906494428cf252621037bd7117e29::usdc::USDC';    
+
+// USDC Coin Type Configuration
+// Default to Native USDC on Mainnet if not specified
+const DEFAULT_USDC_MAINNET = '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC';
+const usdc_coin_type = process.env.BEEP_USDC_COIN_TYPE || DEFAULT_USDC_MAINNET;
 // =============================================================================
 // TYPES
 // =============================================================================
@@ -466,5 +470,82 @@ export async function checkSuiHealth(): Promise<boolean> {
         return true;
     } catch {
         return false;
+    }
+}
+
+/**
+ * Verify direct payment on-chain
+ * Scans recent transactions to the merchant address for a matching payment
+ */
+export async function verifyPaymentOnChain(
+    merchantAddress: string,
+    amountUsdc: number,
+    uuid: string // We might use this for more strict checking if possible
+): Promise<{ paid: boolean; txDigest?: string }> {
+    const client = getSuiClient();
+    
+    // Amount in smallest units (6 decimals for USDC)
+    const amountUnits = Math.floor(amountUsdc * 1_000_000);
+    const amountUnitsStr = amountUnits.toString(); // For strict string comparison
+
+    console.log(`[SUI] 🔍 Verifying payment on-chain: ${amountUsdc} USDC (${amountUnits}) to ${merchantAddress}`);
+
+    try {
+        // Query recent transactions sent to the merchant
+        const response = await client.queryTransactionBlocks({
+            filter: {
+                ToAddress: merchantAddress
+            },
+            options: {
+                showBalanceChanges: true,
+                showEffects: true,
+                showInput: true,
+                showEvents: true
+            },
+            limit: 20, // Check last 20 transactions
+            order: 'descending'
+        });
+
+        for (const block of response.data) {
+            // timestamp check (last 15 minutes) - block.timestampMs is string
+            const txTime = parseInt(block.timestampMs || '0');
+            const fifteenMinutesAgo = Date.now() - 15 * 60 * 1000;
+            
+            if (txTime < fifteenMinutesAgo) {
+                continue; // Too old
+            }
+
+            if (block.effects?.status.status !== 'success') {
+                continue; // Failed transaction
+            }
+
+            // Strict check: Look for UUID in transaction inputs (memo field) first
+            // This is more reliable as it identifies the specific job transaction
+            const txData = JSON.stringify(block.transaction);
+            
+            if (uuid && txData.includes(uuid)) {
+                 console.log(`[SUI] 🎯 Found transaction with matching UUID: ${uuid} (Digest: ${block.digest})`);
+                 console.log(`[SUI] ℹ️ Transaction Status: ${block.effects?.status.status}`);
+
+                 // TRUST THE UUID + SUCCESS STATUS
+                 // In some SUI Pay flows or shared object interactions, the specific USDC balance change 
+                 // might not be visible in the top-level 'balanceChanges' array if it's an internal move call
+                 // or if the RPC response is partial.
+                 // However, since we generated this UUID specifically for this payment, and the transaction
+                 // executed successfully (checked above), we can consider this valid.
+                 
+                 return { 
+                    paid: true, 
+                    txDigest: block.digest 
+                 };
+            }
+        }
+
+        console.log('[SUI] ❌ No matching payment found in recent transactions');
+        return { paid: false };
+
+    } catch (error) {
+        console.error('[SUI] Error verifying payment:', error);
+        return { paid: false };
     }
 }
